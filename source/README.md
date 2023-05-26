@@ -16,6 +16,8 @@ We note that in order to work properly, the hardware details referring to each m
 
 Enclave/ThreadLibrary/cache_details.h
 
+```
+
 /*Cache and memory architecture details*/
 #define CACHE_SIZE 12 //MB
 #define CPU_CORES 6
@@ -24,6 +26,8 @@ Enclave/ThreadLibrary/cache_details.h
 #define SETS_PER_SLICE 1024
 #define BITS_SET 10
 #define BITS_LINE 6 //64 bytes per cache line
+
+```
 
 Further there are other parameters that have to be adjusted depending on the experiment that one needs to execute, 
 those are all given as #defines, and are split among different files including ThreadTest.h, ThreadTest.cpp and Enclave.cpp
