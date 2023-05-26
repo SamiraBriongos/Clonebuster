@@ -1,4 +1,4 @@
-# SGXGuard
+# Clonebuster
 
 This code was tested on Ubuntu 18.04 in different CPUs
 It requires SGX to be enabled on the BIOS of a capable machine and the Intel SDK to be installed.
@@ -7,8 +7,8 @@ The folders are organized as follows
 
 * App contains the untrusted app that executes the ecalls
 * Enclave contains the code where all the relevant functions to explore the DRAM, create the eviction sets and monitor the sets are coded
-* Include
-* TLB_map (To be ignored as it contains other experiments to use the TLB as covert channel)
+* Include 
+
 
 #### Architecture details
 
@@ -38,11 +38,12 @@ will be then written to that file. The amount of data that is written for each o
 Once the app is running it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored
 
 Since this version does not synchronize the execution of the 2 clones, if the results for the detection need 
-to be obtained, one should launch one instance in normal mode, wait until it has executed the initialization 
-phase and then compile a second one in Attack mode (change the Define). The one in attack mode will run permanently and has to be killed
+to be obtained, one should launch one instance in normal mode, wait until it has executed the initialisation 
+phase and then compile a second one in Attack mode (change the Define). The one in attack mode will run permanently and has 
+to be killed manually
 
 
 ## Test
 
-./apo output_file.txt
+./app output_file.txt
 

