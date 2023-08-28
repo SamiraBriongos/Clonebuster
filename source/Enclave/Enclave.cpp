@@ -208,9 +208,11 @@ void build_ev_set(int offset, long int ev_set[MONITORED_SETS * CACHE_SET_SIZE * 
         //f_ev_set[2 * i + 1] = ((original_address) & (0xFFFFFFFFFFFFF000)) + ((offset << 6) & (0x00000FC0));
     }
 
-    for (i = 0; i < MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES; i++)
-    {
-        printf("EVV %lx %i\n", f_ev_set[i], i);
+    if (DEBUG){
+        for (i = 0; i < MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES; i++)
+        {
+            printf("EVV %lx %i\n", f_ev_set[i], i);
+        }
     }
     /*Write this data in sets*/
     if (FULL_SET)
@@ -376,11 +378,12 @@ void build_ev_set(int offset, long int ev_set[MONITORED_SETS * CACHE_SET_SIZE * 
         i = 0;
         do
         {
-            printf("%lx %i ", (*pos1), i);
+            if (DEBUG)
+                printf("%lx %i ", (*pos1), i);
             pos1 = (long unsigned int *)(*pos1);
             i++;
         } while (pos1 != (long unsigned int *)begin);
-        printf("\n");
+        //printf("\n");
     }
 }
 

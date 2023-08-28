@@ -298,10 +298,6 @@ int SGX_CDECL main(int argc, char *argv[])
         }
     }
 
-    //printf_helloworld(global_eid);
-    //printf_helloworld(global_eid);
-    //printf_helloworld(global_eid);
-
     /*Read the content of the file*/
     size_t fsize = get_file_size(SEALED_DATA_FILE);
     if (fsize == (size_t)-1)

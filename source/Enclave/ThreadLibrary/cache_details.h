@@ -1,6 +1,4 @@
 /*Cache and memory architecture details*/
-#define CACHE_SIZE 12 //MB
-#define CPU_CORES 6
 #define CACHE_SET_SIZE 16 //Ways
 #define CACHE_SLICES 12
 #define SETS_PER_SLICE 1024
