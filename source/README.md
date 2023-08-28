@@ -264,6 +264,17 @@ On the contrary, when there is no attack the number of misses should be low.
 
 ## Evaluating different detection algorithms
 
+### Installing python packages
+
+Before being able to execute the analysis script it is necessary to get some python3 packages. Those can be installed as follows:
+
+```bash
+pip3 install matplotlib
+pip3 install mlxtend
+pip3 install sklearn
+pip3 install pandas
+```
+
 The Evaluation section provides a python script that outputs perfomance metrics for the different algorithms evaluated. 
 
 ```bash
