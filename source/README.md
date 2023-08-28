@@ -111,7 +111,6 @@ will be then written to that file. The amount of data that is written for each o
 
 Once the app is running it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored
 
-Different scenarios described in the paper
 
 ```
 **NOTE** Building the Spoiler sets takes around 4 minutes, however building the eviction sets takes different amounts of
@@ -121,22 +120,30 @@ and the number of executions of any SGX application) and the tests perfomed to m
 might range between 10 to 60 minutes
 ```
 
-## No clones and no noise (baseline)
+## No clones and no other applications(baseline)
 
+
+```bash
 ./app output_file.txt
+```
 
-## No clones noise
+## No clones and other applications (noise)
 
-## Clones (1 to n) and no noise 
+In order to generate noise, we use the Phoronix benchmark suite. In this documentation we include information about
+how to install and run one of them, the procedure for the others is similar. 
+
+## Clones (1 to n) and no other applications
 
 Since this version does not synchronize the execution of the 2 clones, if the results for the detection need 
 to be obtained, one should launch one instance in normal mode, wait until it has executed the initialisation 
 phase and then compile a second one in Attack mode (change the Define). The one in attack mode will run permanently and has 
 to be killed manually
 
-## Clones and noise
+## Clones and other applications
 
 # How to evaluate the results
+
+## Visual inspection
 
 ## Installation of the required packages
 
