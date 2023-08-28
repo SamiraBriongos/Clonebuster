@@ -78,7 +78,7 @@ Different scenarios described in the paper
 time depending on the architecture (processors with a number of cores that is a power of 2 take less time to build them), 
 the noise on the system and how fragmented is the SGX memory (this is related with the elapsed time since the last reboot 
 and the number of executions of any SGX application) and the tests perfomed to make sure eviction sets are correct. The time 
-might range between `
+might range between 10 to 60 minutes`
 
 ## No clones and no noise (baseline)
 
