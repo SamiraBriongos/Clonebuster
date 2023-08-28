@@ -1,16 +1,27 @@
 # Clonebuster
 
-This code was tested on Ubuntu 18.04 in different CPUs
-It requires SGX to be enabled on the BIOS of a capable machine and the Intel SDK to be installed.
+This is the artifact submission corresponding to the conditionally accepted paper #207. In our paper, we introduced a clone-detection tool for Intel SGX, dubbed CloneBuster, that uses a cache-based covert channel for enclaves to detect clones (i.e., other enclaves loaded with the same binary). 
+
+Our artifact consists of the source code of CloneBuser with the instructions to compile the code, run it, and install the software dependencies. It requires a machine that supports SGX 1.0 and the Intel SDK installed. Our artifact has been tested on Ubuntu 18.04 and 20.04, with the SDK version 2.18 (although it should work with other versions of the SDK). Once the code is compiled, the application launches the enclave and provides the enclave with details about the hardware (cache size an associativity) and number of monitored ways of the cache as input. Then, the enclave creates all the eviction sets and the covert channel and monitors it when triggered. As output, the enclave writes a file with the cache samples (reading times of the data in the eviction sets). Data obtained from these files has been used in Section 6 of paper #207 to assess the performance of CloneBuster.
+
+## Organization of the repository
+
+`Warning: this is a proof-of-concept, it is mainly useful for collecting data and evaluating it as done in the CloneBuste paper.
+Use it under your own risk.`
+
+This code was tested on Ubuntu 18.04 and 20.04 in different CPU models.
+It requires SGX to be enabled on the BIOS of a capable machine and the Intel SDK to be installed. Further details on how to do that
+are included at the Installation section of this readme so the interested user can install them from scratch. 
 
 The folders are organized as follows
 
-* App contains the untrusted app that executes the ecalls
-* Enclave contains the code where all the relevant functions to explore the DRAM, create the eviction sets and monitor the sets are coded
-* Include 
+* App contains the untrusted app that comunicates with the enclave
+* Enclave contains the code where all the relevant functions to create the eviction sets and monitor the covert channel are coded
+* Include is not relevant for this example
 
+It also includes a Makefile that compiles the enclave and the app.
 
-#### Architecture details
+## Architecture details
 
 We note that in order to work properly, the hardware details referring to each machine need to be changed in 
 
@@ -19,8 +30,6 @@ Enclave/ThreadLibrary/cache_details.h
 ```
 
 /*Cache and memory architecture details*/
-#define CACHE_SIZE 12 //MB
-#define CPU_CORES 6
 #define CACHE_SET_SIZE 16 //Ways
 #define CACHE_SLICES 12
 #define SETS_PER_SLICE 1024
@@ -29,25 +38,66 @@ Enclave/ThreadLibrary/cache_details.h
 
 ```
 
+or given to the enclave as input (in a real setting should be provided during attestation)
+
+In order to know the concrete values of a server:
+
+`$ cat /proc/cpuinfo`
+
+These values can be obtained in the following way:
+
+```
+cache_size to get the slices -> $ cat /proc/cpuinfo | grep "cache size" | head -n 1
+CACHE_SET_SIZE -> $ cpuid | grep -A 9 "cache 3" | grep "ways" | head -n 1
+CACHE_SLICES -> CACHE_SIZE(KB)/1024 
+```
+
 Further there are other parameters that have to be adjusted depending on the experiment that one needs to execute, 
 those are all given as #defines, and are split among different files including ThreadTest.h, ThreadTest.cpp and Enclave.cpp
 
-# How to run it
+## Installation
 
 The folder includes a Makefile that will get the code compiled and generate an enclave and the executable app.
+
+### Pre-requisite
+
+```
+This application requires SGX to be enabled on the BIOS of a capable machine, and the Intel SGX driver and SDK to be installed.
+```
 
 In this version of the code app should be called with a file_name as an argument. All the measurements and data 
 will be then written to that file. The amount of data that is written for each of the experiments is hardcoded in a #define
 
 Once the app is running it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored
 
+# How to use it 
+
+Different scenarios described in the paper
+
+`**NOTE** Building the Spoiler sets takes around 4 minutes, however building the eviction sets takes different amounts of
+time depending on the architecture (processors with a number of cores that is a power of 2 take less time to build them), 
+the noise on the system and how fragmented is the SGX memory (this is related with the elapsed time since the last reboot 
+and the number of executions of any SGX application) and the tests perfomed to make sure eviction sets are correct. The time 
+might range between 10 to 60 minutes`
+
+## No clones and no noise (baseline)
+
+./app output_file.txt
+
+## No clones noise
+
+## Clones (1 to n) and no noise 
+
 Since this version does not synchronize the execution of the 2 clones, if the results for the detection need 
 to be obtained, one should launch one instance in normal mode, wait until it has executed the initialisation 
 phase and then compile a second one in Attack mode (change the Define). The one in attack mode will run permanently and has 
 to be killed manually
 
+## Clones and noise
 
-## Test
+# How to evaluate the results
 
-./app output_file.txt
+## Installation of the required packages
+
+**NOTE**
 
