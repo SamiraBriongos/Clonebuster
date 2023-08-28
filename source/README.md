@@ -127,17 +127,19 @@ might range between 10 to 60 minutes
 ./app output_file.txt
 ```
 
-## No clones and other applications (noise)
-
-In order to generate noise, we use the Phoronix benchmark suite. In this documentation we include information about
-how to install and run one of them, the procedure for the others is similar. 
-
 ## Clones (1 to n) and no other applications
 
 Since this version does not synchronize the execution of the 2 clones, if the results for the detection need 
 to be obtained, one should launch one instance in normal mode, wait until it has executed the initialisation 
 phase and then compile a second one in Attack mode (change the Define). The one in attack mode will run permanently and has 
 to be killed manually
+
+**NOTE** In order to generate and analyze all the data for all the experiments described in the paper, the amount of time is significantly high (days). Therefore, in order to get some basic results we recommend to just get the data for the most basic scenarios (the ones before this paragraph) for just one configuration option (i.e. one value of m), and then go to the How to evaluate the results section.
+
+## No clones and other applications (noise)
+
+In order to generate noise, we use the Phoronix benchmark suite. In this documentation we include information about
+how to install and run one of them, the procedure for the others is similar. 
 
 ## Clones and other applications
 
