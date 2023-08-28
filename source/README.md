@@ -19,7 +19,7 @@ The folders are organized as follows
 * Enclave contains the code where all the relevant functions to create the eviction sets and monitor the covert channel are coded
 * Include is not relevant for this example
 * Noise includes a script to launch different benchmarks that mimic cloud applications
-* Evaluation includes scripts to analyzed the obtained data
+* Evaluation includes scripts to analyze the obtained data
 
 It also includes a Makefile that compiles the enclave and the app.
 
