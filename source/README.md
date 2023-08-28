@@ -11,7 +11,7 @@ Use it under your own risk.`
 
 This code was tested on Ubuntu 18.04 and 20.04 in different CPU models.
 It requires SGX to be enabled on the BIOS of a capable machine and the Intel SDK to be installed. Further details on how to do that
-are included at the end of this readme so the interested user can install them from scratch. 
+are included at the Installation section of this readme so the interested user can install them from scratch. 
 
 The folders are organized as follows
 
@@ -59,6 +59,12 @@ those are all given as #defines, and are split among different files including T
 
 The folder includes a Makefile that will get the code compiled and generate an enclave and the executable app.
 
+### Pre-requisite
+
+```
+This application requires SGX to be enabled on the BIOS of a capable machine, and the Intel SGX driver and SDK to be installed.
+```
+
 In this version of the code app should be called with a file_name as an argument. All the measurements and data 
 will be then written to that file. The amount of data that is written for each of the experiments is hardcoded in a #define
 
@@ -66,7 +72,13 @@ Once the app is running it will permanently run (while (1)) and request for user
 
 # How to use it 
 
-Differen scenarios described in the paper
+Different scenarios described in the paper
+
+`**NOTE** Building the Spoiler sets takes around 4 minutes, however building the eviction sets takes different amounts of
+time depending on the architecture (processors with a number of cores that is a power of 2 take less time to build them), 
+the noise on the system and how fragmented is the SGX memory (this is related with the elapsed time since the last reboot 
+and the number of executions of any SGX application) and the tests perfomed to make sure eviction sets are correct. The time 
+might range between `
 
 ## No clones and no noise (baseline)
 
@@ -82,4 +94,10 @@ phase and then compile a second one in Attack mode (change the Define). The one 
 to be killed manually
 
 ## Clones and noise
+
+# How to evaluate the results
+
+## Installation of the required packages
+
+**NOTE**
 
