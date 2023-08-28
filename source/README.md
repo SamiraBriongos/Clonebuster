@@ -284,3 +284,24 @@ python3 models_new_train.py clean_file.csv
 
 Where `clean_file.csv` is the file obtained as explained in the Prepare data section. As a result the script will provide different metrics (as the f1 score) referring to the experiment reflected in clean_file.csv
 
+Additionally, this folder includes a file called `model_xeon_baee.csv` with data obtained for the baseline scenario and m=14. Results for the data collected and parsed with the provided scripts should look similar to the ones that can be obtained by running:
+
+```bash
+python3 models_new_train.py model_xeon_baee.csv
+```
+
+## Tested systems
+
+This code has been successfully tested on:
+
+* Intel(R) Xeon(R) E-2176G CPU @ 3.70GHz
+	* L3: 12 MB
+	* Associativity: 12
+	* Cache sets: 12288
+	* Slices: 12
+* Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz
+	* L3: 8MB
+	* Associativity: 16
+	* Cache sets: 8192
+	* Slices: 8
+
