@@ -18,7 +18,7 @@ from sklearn import metrics
 from sklearn.metrics import det_curve
 from sklearn.metrics import (accuracy_score, auc, classification_report,
                              confusion_matrix, mean_squared_error,
-                             plot_confusion_matrix, r2_score, roc_curve)
+                             ConfusionMatrixDisplay, r2_score, roc_curve)
 from sklearn.model_selection import (StratifiedKFold, cross_val_score,
                                      cross_validate, train_test_split)
 from sklearn.naive_bayes import GaussianNB
