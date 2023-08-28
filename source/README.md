@@ -104,16 +104,16 @@ source /opt/intel/sgxsdk/environment
 ```
 After installing the SGX driver, the machine has to be rebooted
 
-# How to use it 
+# How to use CloneBuster
 
 In this version of the code app should be called with a file_name as an argument. All the measurements and data 
 will be then written to that file. 
 
-The amount of data that is written for each of the experiments is hardcoded in `#define REPS 120` each repetition simulates the execution of a protected application and collects 16*16*12*5
-It is located at 
+The amount of data that is written for each of the experiments is hardcoded in `#define REPS 120` each repetition simulates the execution of a protected application. It is located at therefore can be edited at:
 
-Once the app is running it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored for each set of experiments. This means that the app has to be manually killed once the desired amount of data has been collected. 
+Enclave/Enclave.cpp
 
+Once the app is running it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored out of the total number of ways for each set of experiments. This means that the app has to be manually killed once the desired amount of data has been collected. 
 
 ```
 **NOTE** Building the Spoiler sets takes around 4 minutes, however building the eviction sets takes different amounts of
@@ -132,7 +132,9 @@ The enclave is called by executing
 ./app output_file.txt
 ```
 
-Where `output_file.txt` could be any name. 
+Where `output_file.txt` could be any name. Note that this file will include all the measurements. If different experiments are executed one after the other, the file has to be manually partitioned.
+
+Once the app starts, it asks for some input. That input refers to the number of monitored ways (m in the paper). For the initial case we recommend a value of 14 (could be any between 9 and 16)
 
 ## Clones (1 to n) and no other applications
 
