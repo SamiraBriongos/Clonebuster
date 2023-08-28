@@ -4,7 +4,7 @@ This is the artifact submission corresponding to the conditionally accepted pape
 
 Our artifact consists of the source code of CloneBuser with the instructions to compile the code, run it, and install the software dependencies. It requires a machine that supports SGX 1.0 and the Intel SDK installed. Our artifact has been tested on Ubuntu 18.04 and 20.04, with the SDK version 2.18 (although it should work with other versions of the SDK). Once the code is compiled, the application launches the enclave and provides the enclave with details about the hardware (cache size an associativity) and number of monitored ways of the cache as input. Then, the enclave creates all the eviction sets and the covert channel and monitors it when triggered. As output, the enclave writes a file with the cache samples (reading times of the data in the eviction sets). Data obtained from these files has been used in Section 6 of paper #207 to assess the performance of CloneBuster.
 
-## Organization
+## Organization of the repository
 
 `Warning: this is a proof-of-concept, it is mainly useful for collecting data and evaluating it as done in the CloneBuste paper.
 Use it under your own risk.`
@@ -21,7 +21,7 @@ The folders are organized as follows
 
 It also includes a Makefile that compiles the enclave and the app.
 
-#### Architecture details
+## Architecture details
 
 We note that in order to work properly, the hardware details referring to each machine need to be changed in 
 
@@ -55,7 +55,7 @@ CACHE_SLICES -> CACHE_SIZE(KB)/1024
 Further there are other parameters that have to be adjusted depending on the experiment that one needs to execute, 
 those are all given as #defines, and are split among different files including ThreadTest.h, ThreadTest.cpp and Enclave.cpp
 
-# How to run it
+## Installation
 
 The folder includes a Makefile that will get the code compiled and generate an enclave and the executable app.
 
@@ -64,13 +64,22 @@ will be then written to that file. The amount of data that is written for each o
 
 Once the app is running it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored
 
+# How to use it 
+
+Differen scenarios described in the paper
+
+## No clones and no noise (baseline)
+
+./app output_file.txt
+
+## No clones noise
+
+## Clones (1 to n) and no noise 
+
 Since this version does not synchronize the execution of the 2 clones, if the results for the detection need 
 to be obtained, one should launch one instance in normal mode, wait until it has executed the initialisation 
 phase and then compile a second one in Attack mode (change the Define). The one in attack mode will run permanently and has 
 to be killed manually
 
-
-## Test
-
-./app output_file.txt
+## Clones and noise
 
