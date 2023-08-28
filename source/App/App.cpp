@@ -317,41 +317,7 @@ int SGX_CDECL main(int argc, char *argv[])
         sgx_destroy_enclave(global_eid);
         return 0;
     }
-    if (read_file_to_buf(SEALED_DATA_FILE, temp_buf, fsize) == false)
-    {
-        std::cout << "Failed to read the sealed data blob from \"" << SEALED_DATA_FILE << "\"" << std::endl;
-        free(temp_buf);
-        sgx_destroy_enclave(global_eid);
-        return false;
-    }
-    else
-    {
-        printf("Los datos leidos %zu %x\n", fsize, temp_buf);
-        sgx_status_t retval;
-        sgx_status_t ret;
-        ret = get_data_ready(global_eid, &retval, temp_buf, fsize);
-        if ((ret != SGX_SUCCESS) || (retval != SGX_SUCCESS))
-        {
-            sgx_destroy_enclave(global_eid);
-            return 0;
-        }
-    }
-
-
-    /*if (read_file_to_buf(SEALED_DATA_FILE, &buf_in, &size_read))
-    {
-        printf("Los datos leidos %zu %x\n",size_read,buf_in);
-        uint8_t *temp_buf = (uint8_t *)malloc(size_read);
-        memcpy(temp_buf, &buf_in, size_read);
-        sgx_status_t retval;
-        sgx_status_t ret;   
-        ret = get_data_ready(global_eid, &retval, &buf_in, size_read);
-        if ((ret != SGX_SUCCESS) || (retval != SGX_SUCCESS))
-        {
-            sgx_destroy_enclave(global_eid);
-            return 0;
-        }
-    }*/
+    
 
     /* Destroy the enclave */
     sgx_destroy_enclave(global_eid);

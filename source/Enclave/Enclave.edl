@@ -55,7 +55,6 @@ enclave {
     trusted {
         public void printf_helloworld();
         public void printfile_measurements([in, count=8] int *ways);
-        public sgx_status_t get_data_ready([in, size=data_size] const uint8_t *sealed_blob, size_t data_size);
     };
 
     /* 
@@ -67,7 +66,6 @@ enclave {
         void ocall_print_string([in, string] const char *str);
         void ocall_print_timed_string([in, string] const char *str);
         void ocall_write_plain_string([in, string] const char *str);
-        void ocall_save_sealed_data([in, count=sealed_data_size] uint8_t *sealed_blob, uint32_t sealed_data_size);
     };
 
 };

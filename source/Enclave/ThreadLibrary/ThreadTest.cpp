@@ -44,12 +44,9 @@ pthread_cond_t condp = PTHREAD_COND_INITIALIZER;
 pthread_cond_t condSets = PTHREAD_COND_INITIALIZER;
 unsigned char secret_data[BUFFER_SIZE] = {0};
 char memory_map[RESERVED_MEMORY];
-char memory_map_tlb[RESERVED_MEMORY_TLB];
 long int eviction_set[MONITORED_SETS*CACHE_SET_SIZE * CACHE_SLICES];
 long int eviction_set_1[CACHE_SET_SIZE * CACHE_SLICES];
 long int samples_data[MONITORED_SETS * CACHE_SET_SIZE * CACHE_SLICES * SAMPLES_SIZE];
-long int samples_tlb[EV_SET_SIZE * SAMPLES_SIZE];
-long int eviction_set_tlb[EV_SET_SIZE];
 int ram_border = 0;
 uint8_t *secret_data_read = NULL;
 char aad_mac_text[BUFSIZ] = "aad mac text";
@@ -276,25 +273,6 @@ long int hammer(long int *pos1, long int *pos2, int rounds)
     long int t1, t2;
     for (i = 0; i < rounds; ++i)
     {
-        /*flush_data(pos1);
-        flush_data(pos2);
-        lfence();
-        //t1 = access_timed(pos1);
-        mem_access(pos1);
-        lfence();
-        t2 = access_timed(pos2);
-        //lfence();
-        //total_time += t1;
-        total_time += t2;*/
-	/*t1 = two_access_timed(pos1, pos2);
-	if(t1>200)
-	{
-	   total_time += t1;
-	}
-	else
-	{
-	   i--;
-	}*/
         total_time += two_access_timed(pos1, pos2);
     }
     return total_time;
@@ -311,75 +289,7 @@ int parity(unsigned long int v)
     return (v >> 60) & 1;
 }
 
-/*
- * TLB sets
- */
-int addr2slice_linear(unsigned long int addr, int sets)
-{
-    int bit0 = parity(addr & SLICE_MASK_0);
-    int bit1 = parity(addr & SLICE_MASK_1);
-    int bit2 = parity(addr & SLICE_MASK_2);
-    int bit3 = parity(addr & SLICE_MASK_3);
-    int bit4 = parity(addr & SLICE_MASK_4);
-    int bit5 = parity(addr & SLICE_MASK_5);
-    int bit6 = parity(addr & SLICE_MASK_6);
-    return ((bit6 << 6) | (bit5 << 5) | (bit4 << 4) | (bit3 << 3) | (bit2 << 2) | (bit1 << 1) | bit0) & ((sets)-1);
-}
 
-void build_tlb_eviction(int max, long int array[])
-{
-    int i, j;
-    int k = -1;
-    i = 0;
-    j = 0;
-    while (i < max)
-    {
-        unsigned long int virt_address = (unsigned long int)&(memory_map_tlb[j * PAGE_SIZE]);
-        //printf("%i %lx %i %x\n",j, (virt_address&0x000000000FFFF000), addr2slice_linear(virt_address, 128),addr2slice_linear(virt_address, 128));
-        if (k == (-1))
-        {
-            if (addr2slice_linear(virt_address, 128) == TEST_SET)
-            {
-                array[i] = virt_address;
-                i++;
-                j += 0x10;
-                j--;
-                k = 3;
-            }
-            j++;
-        }
-        else
-        {
-            if (addr2slice_linear(virt_address, 128) == TEST_SET)
-            {
-                array[i] = virt_address;
-                i++;
-            }
-            j += 0x10;
-        }
-
-        /*         if (addr2slice_linear(virt_address, 128) == TEST_SET)
-        {
-            int l1tlb = (int)((virt_address > PAGE_BITS) & 0x0000000F);
-            if (k == (-1))
-            {
-                k = (virt_address > PAGE_BITS) & 0x0000000F;
-                array[i] = virt_address;
-                i++;
-            }
-            else
-            {
-                if (l1tlb == k)
-                {
-                    array[i] = virt_address;
-                    //j += 0x10; //Bits used for the mapping function
-                    i++;
-                }
-            }
-        }
-        j++; */
-    }
-}
 
 /*
  * Spoiler peaks:
@@ -534,92 +444,6 @@ int check_sampler(void)
 }
 
 /*
-Function to recover the secret data or sealing the new generated key if no data is available
-Steps for sealing:
-    1. Use sgx_calc_sealed_data_size to calculate the number of bytes
-    to allocate for the sgx_sealed_data_t structure.
-    2. Allocate memory for the sgx_sealed_data_t structure.
-    3. Call sgx_seal_data to perform sealing operation
-    4. Save the sealed data structure for future use.
-Steps for unsealing
-    1. Use sgx_get_encrypt_txt_len and sgx_get_add_mac_txt_
-    len to determine the size of the buffers to allocate in terms of bytes.
-    2. Allocate memory for the decrypted text and additional text buffers.
-    3. Call sgx_unseal_data to perform the unsealing operation.
-*/
-
-sgx_status_t seal_data(uint8_t *sealed_blob, uint32_t *data_size)
-{
-    uint32_t sealed_data_size = sgx_calc_sealed_data_size((uint32_t)strlen(aad_mac_text), (uint32_t)strlen((const char *)secret_data));
-    if (sealed_data_size == UINT32_MAX)
-        return SGX_ERROR_UNEXPECTED;
-    (*data_size) = sealed_data_size;
-
-    sealed_blob = (uint8_t *)malloc(sealed_data_size);
-    if (sealed_blob == NULL)
-        return SGX_ERROR_OUT_OF_MEMORY;
-    sgx_status_t err = sgx_seal_data((uint32_t)strlen(aad_mac_text), (const uint8_t *)aad_mac_text, (uint32_t)strlen((const char *)secret_data), (uint8_t *)secret_data, sealed_data_size, (sgx_sealed_data_t *)sealed_blob);
-    /*if (err == SGX_SUCCESS)
-    {
-        // Copy the sealed data to outside buffer
-        memcpy(sealed_blob, temp_sealed_buf, sealed_data_size);
-    }
-    free(temp_sealed_buf);*/
-    return err;
-}
-
-sgx_status_t unseal_data(const uint8_t *sealed_blob, size_t data_size)
-{
-    uint32_t mac_text_len = sgx_get_add_mac_txt_len((const sgx_sealed_data_t *)sealed_blob);
-    uint32_t decrypt_data_len = sgx_get_encrypt_txt_len((const sgx_sealed_data_t *)sealed_blob);
-    if (mac_text_len == UINT32_MAX || decrypt_data_len == UINT32_MAX)
-        return SGX_ERROR_UNEXPECTED;
-    if (mac_text_len > data_size || decrypt_data_len > data_size)
-    {
-        return SGX_ERROR_INVALID_PARAMETER;
-        //return (sgx_status_t) (*sealed_blob);
-    }
-    uint8_t *de_mac_text = (uint8_t *)malloc(mac_text_len);
-    if (de_mac_text == NULL)
-        return SGX_ERROR_OUT_OF_MEMORY;
-    secret_data_read = (uint8_t *)malloc(decrypt_data_len);
-    if (secret_data_read == NULL)
-    {
-        free(de_mac_text);
-        return SGX_ERROR_OUT_OF_MEMORY;
-    }
-    //sgx_status_t ret = SGX_SUCCESS;
-    sgx_status_t ret = sgx_unseal_data((const sgx_sealed_data_t *)sealed_blob, de_mac_text, &mac_text_len, secret_data_read, &decrypt_data_len);
-    if (ret != SGX_SUCCESS)
-    {
-        free(de_mac_text);
-        free(secret_data_read);
-        return ret;
-    }
-    return ret;
-}
-
-int assign_secret(uint8_t *sealed_blob, uint32_t *data_size)
-{
-    //First check if there is some data available
-    //Unseal the data and store the secret
-    if (secret_data[0] == 0)
-    {
-        if (sgx_read_rand(secret_data, BUFFER_SIZE) != SGX_SUCCESS)
-        {
-            return -1;
-        }
-        //Seal the data
-        if (seal_data(sealed_blob, data_size) != SGX_SUCCESS)
-        {
-            return -1;
-        }
-        return 0;
-    }
-    return 1;
-}
-
-/*
 * Fast counter based on the SGX-Malware paper
 * Ideally this process will run forever
 */
@@ -631,11 +455,6 @@ void *fast_counter(void *)
     pthread_mutex_unlock(&global_mutex);
 
     global_counter = 0;
-
-    /*pthread_mutex_lock(&mutex_start);
-    monitor_ready = 1;
-    pthread_mutex_unlock(&mutex_start);
-    pthread_cond_signal(&condp);*/
 
     asm("movq %0, %%rcx\n\t"
         " xor %%rax, %%rax \n\t"
@@ -657,14 +476,6 @@ void *counter(void *)
     pthread_mutex_lock(&global_mutex);
     monitor_running = 1;
     pthread_mutex_unlock(&global_mutex);
-    //Should generate the eviction sets in here
-    /*fd = open(FILE_NAME, O_CREAT | O_RDWR, 0755);
-    if (fd < 0)
-    {
-        return;
-    }
-    unsigned long reserved_size = RES_MEM;
-    base_address = mmap(ADDR, reserved_size, PROTECTION, MAP_SHARED, fd, 0);*/
 
     while (global_counter < 40)
     {
