@@ -103,11 +103,12 @@ After installing the SGX driver, the machine has to be rebooted.
 In this version of the code, app should be called with an output_file as an argument. All the measurements and data 
 will be then written to that file. 
 
-The amount of data that is written for each of the experiments is hardcoded in `#define REPS 120` each repetition simulates the execution of a protected application. It is located and can be edited at:
+The amount of data that is written for each of the experiments is hardcoded in `#define REPS 120`, each repetition simulates the execution of a protected application. This value is located and can be edited at:
 
 Enclave/Enclave.cpp
 
-Once the app is running it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored out of the total number of ways for each set of experiments. This means that the app has to be manually killed once the desired amount of data has been collected. 
+Once the app is running, it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored out of the total number of ways for each set of experiments. 
+As a result, the app has to be manually killed once the desired amount of data has been collected. 
 
 ```
 **NOTE** Building the Spoiler sets takes around 4 minutes, however building the eviction sets takes different amounts of
@@ -167,8 +168,31 @@ As in the previous case, the instance in attack mode will run permanently and ha
 ## No clones and other applications (noise)
 
 In order to generate noise, we use the Phoronix benchmark suite. In this documentation we include information about
-how to install and run one of the benchmarks, the procedure for the others is similar. In any case, it is possible to go 
-to the noise folder and uncomment the code on the 
+how to install and run one of the benchmarks, the procedure for the others is similar. In any case, this repository includes
+a file on the Noise folder with some code to execute the different benchmarks. For each of the benchmarks that one wants to execute, 
+the corresponding line needs to be uncommented (and the previous one commented).
+
+### Installation of Phoronix and the benchmarks
+
+Before the script can be executed, it is necessary to install the `phoronix-test-suite` and its dependencies.
+This can be done as follows:
+
+```bash
+sudo apt-get install php php-cli php-common php-xml
+wget wget https://phoronix-test-suite.com/releases/repo/pts.debian/files/phoronix-test-suite_10.8.4_all.deb
+sudo dpkg -i phoronix-test-suite_10.8.4_all.deb
+```
+
+### Launching one of the noise generating instances
+
+The provided script uses some configuration as was used in the paper, for other configurations change the arguments
+given to the benchmark. In order to make sure the benchmark is permanently running while we execute the experiments, 
+there is an infinite while loop, so the script needs to be killed manually.
+
+```bash
+cd Noise
+./launch_noise_instance.sh
+```
 
 ## Clones and other applications
 
