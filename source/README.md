@@ -1,27 +1,21 @@
 # Clonebuster
 
-This is the artifact submission corresponding to the conditionally accepted paper #207. In our paper, we introduced a clone-detection tool for Intel SGX, dubbed CloneBuster, that uses a cache-based covert channel for enclaves to detect clones (i.e., other enclaves loaded with the same binary). 
+This is the artifact submission corresponding to paper #207. In our paper, we introduced a clone-detection tool for Intel SGX, dubbed CloneBuster, that uses a cache-based covert channel for enclaves to detect clones (i.e., other enclaves loaded with the same binary). 
 
 Our artifact consists of the source code of CloneBuser with the instructions to compile the code, run it, and install the software dependencies. It requires a machine that supports SGX 1.0 and the Intel SDK installed. Our artifact has been tested on Ubuntu 18.04 and 20.04, with the SDK version 2.18 (although it should work with other versions of the SDK). Details about the hardware (cache size an associativity) are hardcoded. Once the code is compiled, the application launches the enclave and provides the enclave with details about the number of monitored ways of the cache as input. Then, the enclave creates all the eviction sets and the covert channel and monitors it when triggered. As output, the enclave writes a file with the cache samples (reading times of the data in the eviction sets). Data obtained from these files has been used in Section 6 of paper #207 to assess the performance of CloneBuster.
 
-### Contact author for the artifacts
-
-*samira.briongos@neclab.eu*
-
-**NOTE:** we will provide access via ssh to a machine with all the dependencies installed upon request. 
+**NOTE:** Upon request, we can provide reviewers with ssh access to a machine located at our institution where all the dependencies to run CloneBuster are installed. 
 
 ## Organization of the repository
 
-`Warning: this is a proof-of-concept, it is mainly useful for collecting data and evaluating it as done in the CloneBuste paper.
-Use it under your own risk.`
+`Warning: this is a proof-of-concept, it is mainly useful for collecting data and evaluating it as done in the CloneBuster paper. Use it under your own risk.`
 
-This code was tested on Ubuntu 18.04 and 20.04 in different CPU models.
-It requires SGX to be enabled on the BIOS of a capable machine and the Intel SDK to be installed. Further details on how to do that
-are included at the Installation section of this readme so the interested user can install them from scratch. 
+This code was tested on Ubuntu 18.04 and 20.04 on different CPU models.
+It requires SGX to be enabled in the BIOS of a capable machine and the Intel SDK to be installed. Further details on how to do that are included at the Installation section of this readme so the interested user can install them from scratch. 
 
 The folders are organized as follows
 
-* App contains the untrusted app that comunicates with the enclave
+* App contains the untrusted app that communicates with the enclave
 * Enclave contains the code where all the relevant functions to create the eviction sets and monitor the covert channel are coded
 * Include is not relevant for this example
 
@@ -44,13 +38,13 @@ Enclave/ThreadLibrary/cache_details.h
 
 ```
 
-or given to the enclave as input (in a real setting should be provided during attestation)
+or given to the enclave as input (in a real setting should be provided during attestation).
 
-In order to get some information about a server:
+The required information can by obtained by launching:
 
 `$ cat /proc/cpuinfo`
 
-Concrete, the values needed for CloneBuster can be obtained in the following way:
+Concretely, the values needed for CloneBuster can be obtained in the following way:
 
 ```
 cache_size to get the slices -> $ cat /proc/cpuinfo | grep "cache size" | head -n 1
@@ -58,7 +52,7 @@ CACHE_SET_SIZE -> $ cpuid | grep -A 9 "cache 3" | grep "ways" | head -n 1
 CACHE_SLICES -> CACHE_SIZE(KB)/1024 
 ```
 
-Further there are other parameters that have to be adjusted depending on the experiment that one needs to execute, 
+Further, there are other parameters that have to be adjusted depending on the experiment that one needs to execute, 
 those are all given as #defines, and are split among different files including ThreadTest.h, ThreadTest.cpp and Enclave.cpp
 
 ## Installation
@@ -73,12 +67,12 @@ make
 ### Pre-requisite
 
 ```
-This application requires SGX to be enabled on the BIOS of a capable machine, and the Intel SGX driver and SDK to be installed.
+This application requires SGX to be enabled in the BIOS of a capable machine, and the Intel SGX driver and SDK to be installed.
 ```
 
 ### How to install SGX and related packages
 
-As for the Intel manual, first of all ensure some packages are installed:
+As per the Intel manual, first of install the following packages:
 
 ```bash
 sudo apt-get install libssl-dev libcurl4-openssl-dev libprotobuf-dev dkms build-essential python
@@ -102,11 +96,11 @@ chmod +x sgx_installer.bin
 echo -e "no\n/opt/intel" | sudo ./sgx_installer.bin
 source /opt/intel/sgxsdk/environment
 ```
-After installing the SGX driver, the machine has to be rebooted
+After installing the SGX driver, the machine has to be rebooted.
 
 # How to use CloneBuster
 
-In this version of the code app should be called with a output_file as an argument. All the measurements and data 
+In this version of the code, app should be called with an output_file as an argument. All the measurements and data 
 will be then written to that file. 
 
 The amount of data that is written for each of the experiments is hardcoded in `#define REPS 120` each repetition simulates the execution of a protected application. It is located and can be edited at:
@@ -119,7 +113,7 @@ Once the app is running it will permanently run (while (1)) and request for user
 **NOTE** Building the Spoiler sets takes around 4 minutes, however building the eviction sets takes different amounts of
 time depending on the architecture (processors with a number of cores that is a power of 2 take less time to build them), 
 the noise on the system and how fragmented is the SGX memory (this is related with the elapsed time since the last reboot 
-and the number of executions of any SGX application) and the tests perfomed to make sure eviction sets are correct. The time 
+and the number of executions of any SGX application) and the tests performed to make sure eviction sets are correct. The time 
 might range between 10 to 60 minutes
 ```
 **NOTE** In order to generate and analyze all the data for all the experiments described in the paper, the amount of time is significantly high (days). Therefore, in order to get some basic results we recommend to just get the data for the most basic scenarios (the ones right after this paragraph) for just one configuration option (i.e. one value of m), and then go to the How to evaluate the results section.
@@ -145,7 +139,7 @@ and write down the value. It will be needed later for preparing the files for th
 
 ## Clones (1 to n) and no other applications
 
-Since this version or the repository does not synchronize the execution of the 2 clones, (it would ease the execution of clone attacks) we use an approximation, and launch one initial instance in normal mode (as described before and could be that one) 
+Since this version of the repository does not synchronize the execution of the 2 clones, (it would ease the execution of clone attacks) we use an approximation, and launch one initial instance in normal mode (as described before and could be that one) 
 and then a second one in attack mode. The second instance should be launched once the first one is already running and waiting 
 for new input, otherwise both instances will generate conflicts when trying to create and validate the eviction sets, and 
 as a result they might not succeed (i.e. the application will not run).
@@ -159,7 +153,7 @@ wc output_file.txt
 and write the value of the output. It will be needed later for preparing the files for the evaluation
 
 For the second instance go to `Enclave/Enclave.cpp` and change the hardcoded value `#define ATTACK 0`, the 0 has to be changed 
-for a 1, and then needs to be compiled again. Therefore one should execute:
+to 1, and then needs to be compiled again. Therefore one should execute:
 
 ```bash
 make
@@ -173,7 +167,7 @@ As in the previous case, the instance in attack mode will run permanently and ha
 ## No clones and other applications (noise)
 
 In order to generate noise, we use the Phoronix benchmark suite. In this documentation we include information about
-how to install and run one of the benchmakrs, the procedure for the others is similar. In any case, it is possible to go 
+how to install and run one of the benchmarks, the procedure for the others is similar. In any case, it is possible to go 
 to the noise folder and uncomment the code on the 
 
 ## Clones and other applications
