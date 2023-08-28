@@ -106,10 +106,10 @@ After installing the SGX driver, the machine has to be rebooted
 
 # How to use CloneBuster
 
-In this version of the code app should be called with a file_name as an argument. All the measurements and data 
+In this version of the code app should be called with a output_file as an argument. All the measurements and data 
 will be then written to that file. 
 
-The amount of data that is written for each of the experiments is hardcoded in `#define REPS 120` each repetition simulates the execution of a protected application. It is located at therefore can be edited at:
+The amount of data that is written for each of the experiments is hardcoded in `#define REPS 120` each repetition simulates the execution of a protected application. It is located and can be edited at:
 
 Enclave/Enclave.cpp
 
@@ -134,14 +134,41 @@ The enclave is called by executing
 
 Where `output_file.txt` could be any name. Note that this file will include all the measurements. If different experiments are executed one after the other, the file has to be manually partitioned.
 
-Once the app starts, it asks for some input. That input refers to the number of monitored ways (m in the paper). For the initial case we recommend a value of 14 (could be any between 9 and 16)
+Once the app starts, it asks for some input. That input refers to the number of monitored ways (m in the paper). For the initial case we could use for example a value of 14 (could be any between 9 and 16)
+
+**NOTE** If many experiments (different values of m) are going to be tested and data is going to be analyzed, please execute
+
+```bash
+wc output_file.txt
+```
+and write down the value. It will be needed later for preparing the files for the evaluation
 
 ## Clones (1 to n) and no other applications
 
-Since this version does not synchronize the execution of the 2 clones, if the results for the detection need 
-to be obtained, one should launch one instance in normal mode, wait until it has executed the initialisation 
-phase and then compile a second one in Attack mode (change the Define). The one in attack mode will run permanently and has 
-to be killed manually
+Since this version or the repository does not synchronize the execution of the 2 clones, (it would ease the execution of clone attacks) we use an approximation, and launch one initial instance in normal mode (as described before and could be that one) 
+and then a second one in attack mode. The second instance should be launched once the first one is already running and waiting 
+for new input, otherwise both instances will generate conflicts when trying to create and validate the eviction sets, and 
+as a result they might not succeed (i.e. the application will not run).
+
+**NOTE** If one wishes to use the same regular instance that was used in the previous case, and in order to ease the labelling,
+please execute
+
+```bash
+wc output_file.txt
+```
+and write the value of the output. It will be needed later for preparing the files for the evaluation
+
+For the second instance go to `Enclave/Enclave.cpp` and change the hardcoded value `#define ATTACK 0`, the 0 has to be changed 
+for a 1, and then needs to be compiled again. Therefore one should execute:
+
+```bash
+make
+./app output_file_attack.txt
+```
+
+Then provide the same input as in the regular instance (same value of m)
+
+As in the previous case, the instance in attack mode will run permanently and has to be killed manually
 
 ## No clones and other applications (noise)
 
