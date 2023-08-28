@@ -173,7 +173,8 @@ As in the previous case, the instance in attack mode will run permanently and ha
 ## No clones and other applications (noise)
 
 In order to generate noise, we use the Phoronix benchmark suite. In this documentation we include information about
-how to install and run one of them, the procedure for the others is similar. 
+how to install and run one of the benchmakrs, the procedure for the others is similar. In any case, it is possible to go 
+to the noise folder and uncomment the code on the 
 
 ## Clones and other applications
 
