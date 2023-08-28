@@ -107,9 +107,12 @@ After installing the SGX driver, the machine has to be rebooted
 # How to use it 
 
 In this version of the code app should be called with a file_name as an argument. All the measurements and data 
-will be then written to that file. The amount of data that is written for each of the experiments is hardcoded in a #define
+will be then written to that file. 
 
-Once the app is running it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored
+The amount of data that is written for each of the experiments is hardcoded in `#define REPS 120` each repetition simulates the execution of a protected application and collects 16*16*12*5
+It is located at 
+
+Once the app is running it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored for each set of experiments. This means that the app has to be manually killed once the desired amount of data has been collected. 
 
 
 ```
@@ -119,13 +122,17 @@ the noise on the system and how fragmented is the SGX memory (this is related wi
 and the number of executions of any SGX application) and the tests perfomed to make sure eviction sets are correct. The time 
 might range between 10 to 60 minutes
 ```
+**NOTE** In order to generate and analyze all the data for all the experiments described in the paper, the amount of time is significantly high (days). Therefore, in order to get some basic results we recommend to just get the data for the most basic scenarios (the ones right after this paragraph) for just one configuration option (i.e. one value of m), and then go to the How to evaluate the results section.
 
 ## No clones and no other applications(baseline)
 
+The enclave is called by executing
 
 ```bash
 ./app output_file.txt
 ```
+
+Where `output_file.txt` could be any name. 
 
 ## Clones (1 to n) and no other applications
 
@@ -133,8 +140,6 @@ Since this version does not synchronize the execution of the 2 clones, if the re
 to be obtained, one should launch one instance in normal mode, wait until it has executed the initialisation 
 phase and then compile a second one in Attack mode (change the Define). The one in attack mode will run permanently and has 
 to be killed manually
-
-**NOTE** In order to generate and analyze all the data for all the experiments described in the paper, the amount of time is significantly high (days). Therefore, in order to get some basic results we recommend to just get the data for the most basic scenarios (the ones before this paragraph) for just one configuration option (i.e. one value of m), and then go to the How to evaluate the results section.
 
 ## No clones and other applications (noise)
 
