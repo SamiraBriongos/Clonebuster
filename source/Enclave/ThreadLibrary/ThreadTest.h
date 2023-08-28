@@ -57,7 +57,7 @@
 #endif*/
 
 #define BUFFER_SIZE 50
-#define SAMPLES_SIZE 20
+#define SAMPLES_SIZE 5
 #define RESERVED_MEMORY 36*1024*1024
 #define RESERVED_RAM 4*1024*1024
 #define TEST_SET 28

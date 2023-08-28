@@ -286,16 +286,16 @@ int SGX_CDECL main(int argc, char *argv[])
     {
         cout << "Select a run " << endl;
         cin >> status;
-        if (status == 0)
-        {
-            cout << "Saving data" << endl;
-            printf_helloworld(global_eid);
-        }
-        else
-        {
+        // if (status == 0)
+        // {
+        //     cout << "Saving data" << endl;
+        //     printf_helloworld(global_eid);
+        // }
+        // else
+        // {
             cout << "Selected M out of W" << status <<endl;
             printfile_measurements(global_eid, &status);
-        }
+        // }
     }
 
     /*Read the content of the file*/
