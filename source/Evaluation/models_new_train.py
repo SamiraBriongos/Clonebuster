@@ -100,8 +100,10 @@ def main():
         r4=[]
         r5=[]
         r6=[]
+        r7=[]
+        r8=[]
         #lr = [1,2,4,8,16,32]
-        lr = [4,8,16,32,48,64]
+        lr = [4,8,16,32,48,64,128,256]
         ct = 3
         for i in lr:
             X = []
@@ -247,6 +249,12 @@ def main():
                 nnei = 16
             if (i == 64):
                 r6.append(fbest)
+                nnei = 16 
+            if (i == 128):
+                r7.append(fbest)
+                nnei = 16 
+            if (i == 256):
+                r8.append(fbest)
                 nnei = 16   
 
             # mean_tpr += interp(mean_fpr, fpr, tpr)
@@ -322,7 +330,6 @@ def main():
                     'f1': 'f1'}
             for name, model in models:
                 if (name == 'SVM'):
-                    print('SVN uff')
                     kfold = StratifiedKFold(
                         n_splits=10, random_state=1, shuffle=True)
                     cv_results = cross_validate(
@@ -352,6 +359,10 @@ def main():
                         r5.append(cv_results['test_f1'].mean())
                     if (i == 64):
                         r6.append(cv_results['test_f1'].mean())
+                    if (i == 128):
+                        r7.append(cv_results['test_f1'].mean())
+                    if (i == 256):
+                        r8.append(cv_results['test_f1'].mean())
                     names.append(name)
                     print('%s: %f (%f)' % (
                         name, (cv_results['test_acc']).mean(), (cv_results['test_acc']).std()))
@@ -396,6 +407,10 @@ def main():
                         r5.append(cv_results['test_f1'].mean())
                     if (i == 64):
                         r6.append(cv_results['test_f1'].mean())
+                    if (i == 128):
+                        r7.append(cv_results['test_f1'].mean())
+                    if (i == 256):
+                        r8.append(cv_results['test_f1'].mean())
                     names.append(name)
                     print('%s: %f (%f)' % (
                         name, (cv_results['test_acc']).mean(), (cv_results['test_acc']).std()))
@@ -424,15 +439,21 @@ def main():
             # figname = str(filor[0])+'_w_'+str(i)+'.png'
             # plt.savefig(figname)
             # #plt.show()
+                
+        test_names = ['Threshold','Logistic \nRegression','Lineal \nDiscriminant \nAnalysis','KNN','Decission \nTree','Random \nForest','Gaussian\n Naive \n Bayes','Ada Boost \nClassifier','Neural \nNetwork','SVM']
 
-        print("Final results")
-        print(r5)
-        print(r6)
+        print("Final results, for window = 4 to window =256")
+        print(test_names)
         print(r1)
         print(r2)
         print(r3)
         print(r4)
+        print(r5)
+        print(r6)
+        print(r7)
+        print(r8)
 
+""""
         test_names = ['Threshold','Logistic \nRegression','Lineal \nDiscriminant \nAnalysis','KNN','Decission \nTree','Random \nForest','Gaussian\n Naive \n Bayes','Ada Boost \nClassifier','Neural \nNetwork','SVM']
 
         k = np.arange(len(test_names))  # the label locations
@@ -462,12 +483,11 @@ def main():
 
         #plt.grid(True)
         fig.tight_layout()
-        filor = str(filein).split('.')
-        figname = str(filor[0])+'_w_'+str(i)+'.png'
-        plt.savefig(figname)
+        plt.savefig('figure.png', format='png')
+        #plt.savefig(figname)
         #plt.savefig('misses_saved.eps', bbox_inches = "tight")
-        #plt.show()
-
+        plt.show()
+"""
 
 if __name__ == "__main__":
     main()
