@@ -220,10 +220,56 @@ cd Noise
 
 # How to evaluate the results
 
+In order to analyze and evaluate the results using the collected data, the `Evaluation` folder includes some scripts that 
+first will generate a file including normal and attack samples (with clones) and another one that will use that file as input
+to train and test the different detection algorithms evaluated in the paper.
+
 ## Prepare the data
+
+The provided scripts will filter out the data from `output_file.txt` obtained when executing app, and get a labeled csv file 
+for its evaluation. In order to do so execute:
+
+```bash
+cd Evaluation
+./prepare_normal_samples.sh raw_data clean_data.csv ini end
+./prepare_attack_samples.sh raw_data clean_data.csv ini end
+```
+Where `raw_data` is the aforementioned `output_file.txt`, `clean_data.csv` is the name of the file where the data ready to be analyzed
+will be written, `ini` and `end` refer respectively to the first and last line corresponding to the experiment to be evaluated. **NOTE** that this means same conditions, same value of m, with and without a clone.
+
+For example, if one executes 
+
+```bash
+./app output_file.txt
+```
+with m=14 and then gets the number of lines in output_file.txt and is equal to 1000, for the normal set of samples:
+
+```bash
+cd Evaluation
+./prepare_normal_samples.sh output_file.txt clean_data.csv 0 1000
+```
+
+Then with the attack running, the regular app is executed with m=14 again, so the lines in output_file.txt is now equal to 2000,
+then, the final version of the clean file is obtained after executing 
+
+```bash
+./prepare_attack_samples.sh output_file.txt clean_data.csv 1000 2000
+```
 
 ## Visual inspection
 
-## Installation of the required packages
+If everything has been executed correctly, and the generated csv file is opened, it should be possible to visually see that 
+if the last column is equal to '1'(attack) there is a great number of misses or high values on the initial columns of the same row.
+On the contrary, when there is no attack the number of misses should be low.
 
+## Evaluating different detection algorithms
+
+The Evaluation section provides a python script that outputs perfomance metrics for the different algorithms evaluated. 
+
+```bash
+cd Evaluation
+python3 models_new_train.py clean_file.csv
+```
+
+Where `clean_file.csv` is the file obtained as explained in the Prepare data section. As a result the script will provide different metrics (as the f1 score) referring to the experiment reflected in clean_file.csv
 
