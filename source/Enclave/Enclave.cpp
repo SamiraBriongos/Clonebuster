@@ -1674,33 +1674,35 @@ void printfile_measurements(int *ways)
         }
         pthread_mutex_unlock(&mutex_start);
         pthread_create(&monitor_task, NULL, monitor_sets_old, NULL);
+        printf("Eviction sets have been created and the app is ready for input\n");
     }
-
-    int inter = (*(ways));
-    if ((inter > CACHE_SET_SIZE) || (inter < 3))
-    {
-        inter = CACHE_SET_SIZE;
-    }
-    //pthread_cancel(monitor_task);
-    printf("Pre measurements %i\n", inter);
-    pthread_mutex_lock(&mutex_start);
-    while (!(check_sampler()))
-    {
-        pthread_cond_wait(&condSets, &mutex_start);
-    }
-    pthread_mutex_unlock(&mutex_start);
-    if (mon_ways != inter)
-    {
-        mon_ways = inter;
-        printf("New ways %d \n", mon_ways);
-        build_ev_set(OFFSET, eviction_set, eviction_set_1, final_eviction_set, mon_ways);
-    }
-    printf("New measurements \n");
-    if (ATTACK)
-    {
-	pthread_create(&monitor_task, NULL, monitor_sets_old, NULL);
-    }
-    else{
-    	pthread_create(&monitor_task, NULL, monitor_sets_file, NULL);
+    else {
+        int inter = (*(ways));
+        if ((inter > CACHE_SET_SIZE) || (inter < 3))
+        {
+            inter = CACHE_SET_SIZE;
+        }
+        //pthread_cancel(monitor_task);
+        printf("Pre measurements %i\n", inter);
+        pthread_mutex_lock(&mutex_start);
+        while (!(check_sampler()))
+        {
+            pthread_cond_wait(&condSets, &mutex_start);
+        }
+        pthread_mutex_unlock(&mutex_start);
+        if (mon_ways != inter)
+        {
+            mon_ways = inter;
+            printf("New ways %d \n", mon_ways);
+            build_ev_set(OFFSET, eviction_set, eviction_set_1, final_eviction_set, mon_ways);
+        }
+        printf("New measurements \n");
+        if (ATTACK)
+        {
+        pthread_create(&monitor_task, NULL, monitor_sets_old, NULL);
+        }
+        else{
+            pthread_create(&monitor_task, NULL, monitor_sets_file, NULL);
+        }
     }
 }
