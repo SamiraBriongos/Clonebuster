@@ -30,14 +30,26 @@ Enclave/ThreadLibrary/cache_details.h
 ```
 
 /*Cache and memory architecture details*/
-#define CACHE_SIZE 12 //MB
-#define CPU_CORES 6
 #define CACHE_SET_SIZE 16 //Ways
 #define CACHE_SLICES 12
 #define SETS_PER_SLICE 1024
 #define BITS_SET 10
 #define BITS_LINE 6 //64 bytes per cache line
 
+```
+
+or given to the enclave as input (in a real setting should be provided during attestation)
+
+In order to know the concrete values of a server:
+
+`$ cat /proc/cpuinfo`
+
+These values can be obtained in the following way:
+
+```
+cache_size to get the slices -> $ cat /proc/cpuinfo | grep "cache size" | head -n 1
+CACHE_SET_SIZE -> $ cpuid | grep -A 9 "cache 3" | grep "ways" | head -n 1
+CACHE_SLICES -> CACHE_SIZE(KB)/1024 
 ```
 
 Further there are other parameters that have to be adjusted depending on the experiment that one needs to execute, 
