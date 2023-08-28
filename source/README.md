@@ -18,6 +18,8 @@ The folders are organized as follows
 * App contains the untrusted app that communicates with the enclave
 * Enclave contains the code where all the relevant functions to create the eviction sets and monitor the covert channel are coded
 * Include is not relevant for this example
+* Noise includes a script to launch different benchmarks that mimic cloud applications
+* Evaluation includes scripts to analyzed the obtained data
 
 It also includes a Makefile that compiles the enclave and the app.
 
@@ -107,8 +109,9 @@ The amount of data that is written for each of the experiments is hardcoded in `
 
 Enclave/Enclave.cpp
 
-Once the app is running, it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored out of the total number of ways for each set of experiments. 
-As a result, the app has to be manually killed once the desired amount of data has been collected. 
+Once the app is running, it will permanently run (while (1)) and request for user input M that refers to the number of ways to be monitored out of the total number of ways for each set of experiments. If no input is given, no output will be generated. 
+As a result, the app has to be manually killed once the desired experiments have been executed. 
+**Warning** The same instance can be used for multiple experiments. This avoids generating and validating the eviction sets for every single experiment as they take time, and this step is expected to be executed just once in a realistic environment, i.e. the enclave does not need to be finished between consecutive calls.
 
 ```
 **NOTE** Building the Spoiler sets takes around 4 minutes, however building the eviction sets takes different amounts of
@@ -127,16 +130,22 @@ The enclave is called by executing
 ./app output_file.txt
 ```
 
-Where `output_file.txt` could be any name. Note that this file will include all the measurements. If different experiments are executed one after the other, the file has to be manually partitioned.
-
-Once the app starts, it asks for some input. That input refers to the number of monitored ways (m in the paper). For the initial case we could use for example a value of 14 (could be any between 9 and 16)
+Where `output_file.txt` could be any name. Note that this file will include all the measurements. If different experiments are executed one after the other, the file has to be manually partitioned. A script that helps with that task is provided in the Evaluation folder, but it requires the first and the last line of the experiment in the `output_file.txt`. 
 
 **NOTE** If many experiments (different values of m) are going to be tested and data is going to be analyzed, please execute
 
 ```bash
 wc output_file.txt
 ```
-and write down the value. It will be needed later for preparing the files for the evaluation
+and write down the value for each of them. The value of the initial and last lines of the data corresponding to the experiment
+will be needed later for preparing the files for the evaluation.
+
+Once the app starts, it asks for some input. That input refers to the number of monitored ways (m in the paper). For the initial case we could use for example a value of 14 (could be any between 9 and 16). If it is the first time the app is executed (initialization) it will generate and validate the eviction sets and it will output the following message once is is ready.
+
+```
+Eviction sets have been created and the app is ready for input
+```
+From this moment, once any input is given the results will be written in the file.
 
 ## Clones (1 to n) and no other applications
 
@@ -189,18 +198,32 @@ The provided script uses some configuration as was used in the paper, for other 
 given to the benchmark. In order to make sure the benchmark is permanently running while we execute the experiments, 
 there is an infinite while loop, so the script needs to be killed manually.
 
+The following needs to be executed in a different terminal.
+
 ```bash
 cd Noise
 ./launch_noise_instance.sh
 ```
 
+Once the benchmark is running, provide a new input to the app (should be already running) to get results for a new experiment.
+
 ## Clones and other applications
 
+As in the previous case with clones, we need a second instance with `#define ATTACK 1`, that has to be compiled and executed.
+
+Once the attack instance is running and has finished with the eviction sets, open a different terminal and execute:
+
+```bash
+cd Noise
+./launch_noise_instance.sh
+```
+
 # How to evaluate the results
+
+## Prepare the data
 
 ## Visual inspection
 
 ## Installation of the required packages
 
-**NOTE**
 
