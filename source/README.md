@@ -13,6 +13,14 @@ The VM is accessible in:
 
 https://drive.google.com/file/d/1BBK5Fxw8TIGRheOnIqFij_TeYDip2sBf/view?usp=drive_link
 
+**NOTE:** Alternatively we provide a way to create a Docker image, but this requires that SGX to be installed on the host. The 
+device arguments might require changes. To run the app in docker:
+
+```bash
+sudo docker build -t clonebuster .
+docker run --env http_proxy --env https_proxy --device=/dev/sgx_enclave --device=/dev/sgx_provision -v /dev/log:/dev/log -v aesmd-socket:/var/run/aesmd -it clonebuster /bin/sh
+```
+
 ## Organization of the repository
 
 `Warning: this is a proof-of-concept, it is mainly useful for collecting data and evaluating it as done in the CloneBuster paper. Use it under your own risk.`
