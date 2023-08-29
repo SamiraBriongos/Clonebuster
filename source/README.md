@@ -6,6 +6,13 @@ Our artifact consists of the source code of CloneBuser with the instructions to 
 
 **NOTE:** Upon request, we can provide reviewers with ssh access to a machine located at our institution where all the dependencies to run CloneBuster are installed. 
 
+**NOTE:** We additionally provide a VM for evaluation that runs in VirtualBox and is hosted on an external repo because of the file 
+size limits of github. The username is Clonebuster and the password is clone. This machine allows to run the enclave in **SIMULATION** mode, so it is not using the actual hardware but it should be possible to run it on any machine.
+
+The VM is accessible in:
+
+
+
 ## Organization of the repository
 
 `Warning: this is a proof-of-concept, it is mainly useful for collecting data and evaluating it as done in the CloneBuster paper. Use it under your own risk.`
@@ -89,6 +96,7 @@ wget https://download.01.org/intel-sgx/sgx-linux/2.18/distro/ubuntu20.04-server/
 chmod +x sgx_linux_x64_driver_2.11.054c9c4c.bin
 sudo ./sgx_linux_x64_driver_2.11.054c9c4c.bin
 wget -qO - https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | sudo apt-key add -
+echo 'deb [arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu focal main' | sudo tee /etc/apt/sources.list.d/intel-sgx.list
 sudo apt-get update
 sudo apt-get install libsgx-launch libsgx-urts libsgx-launch-dbgsym libsgx-urts-dbgsym
 sudo apt-get install libsgx-epid libsgx-epid-dbgsym
@@ -289,6 +297,8 @@ Additionally, this folder includes a file called `model_xeon_baee.csv` with data
 ```bash
 python3 models_new_train.py model_xeon_base.csv
 ```
+
+**WARNING** Depending on the size of the data files given to the python script and the amount of them, training and evaluating the different algorithms could be time consuming
 
 ## Tested systems
 
