@@ -287,7 +287,7 @@ Where `clean_file.csv` is the file obtained as explained in the Prepare data sec
 Additionally, this folder includes a file called `model_xeon_baee.csv` with data obtained for the baseline scenario and m=14. Results for the data collected and parsed with the provided scripts should look similar to the ones that can be obtained by running:
 
 ```bash
-python3 models_new_train.py model_xeon_baee.csv
+python3 models_new_train.py model_xeon_base.csv
 ```
 
 ## Tested systems
