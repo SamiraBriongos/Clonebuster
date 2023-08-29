@@ -11,7 +11,7 @@ size limits of github. The username is Clonebuster and the password is clone. Th
 
 The VM is accessible in:
 
-
+https://drive.google.com/file/d/1BBK5Fxw8TIGRheOnIqFij_TeYDip2sBf/view?usp=drive_link
 
 ## Organization of the repository
 
